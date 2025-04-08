@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { collection, addDoc, query, onSnapshot, orderBy, where, doc, getDoc, getDocs, collectionGroup } from 'firebase/firestore';
 import { db } from '@/lib/firebase/firebase';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { useError } from '@/lib/hooks/useError';
 import Todo from './Todo';
+import EmojiPicker, { EmojiClickData, Theme as EmojiTheme } from 'emoji-picker-react';
+import { useTheme } from '@/lib/contexts/ThemeContext';
 
 interface TodoItem {
   id: string;
@@ -20,8 +22,22 @@ export default function TodoList() {
   const [newTodo, setNewTodo] = useState('');
   const { user, loading: authLoading } = useAuth();
   const { reportError } = useError();
+  const { resolvedTheme } = useTheme();
   const [loadingOwn, setLoadingOwn] = useState(true);
   const [loadingShared, setLoadingShared] = useState(true);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const emojiPickerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (emojiPickerRef.current && !emojiPickerRef.current.contains(event.target as Node)) {
+        setShowEmojiPicker(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   useEffect(() => {
     if (!user) {
@@ -132,7 +148,18 @@ export default function TodoList() {
     }
   };
 
-  // Combined loading state
+  const onEmojiClick = (emojiData: EmojiClickData, event: MouseEvent) => {
+    const cursorPosition = inputRef.current?.selectionStart ?? newTodo.length;
+    const textBefore = newTodo.substring(0, cursorPosition);
+    const textAfter = newTodo.substring(cursorPosition);
+    setNewTodo(textBefore + emojiData.emoji + textAfter);
+    setShowEmojiPicker(false);
+    inputRef.current?.focus();
+    setTimeout(() => {
+      inputRef.current?.setSelectionRange(cursorPosition + emojiData.emoji.length, cursorPosition + emojiData.emoji.length);
+    }, 0);
+  };
+
   const isLoading = authLoading || loadingOwn || loadingShared;
 
   if (isLoading) {
@@ -154,8 +181,9 @@ export default function TodoList() {
   return (
     <div className="max-w-2xl mx-auto p-4">
       <form onSubmit={addTodo} className="mb-4">
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2 relative">
           <input
+            ref={inputRef}
             type="text"
             value={newTodo}
             onChange={(e) => setNewTodo(e.target.value)}
@@ -163,12 +191,33 @@ export default function TodoList() {
             className="flex-1 p-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
           />
           <button
+            type="button"
+            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+            className="p-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 rounded-full hover:bg-gray-100 dark:hover:bg-gray-600"
+            aria-label="Add emoji"
+          >
+            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM7 9a1 1 0 100-2 1 1 0 000 2zm7-1a1 1 0 11-2 0 1 1 0 012 0zm-.464 5.535a.75.75 0 10-1.06 1.06 3.5 3.5 0 01-4.95 0 .75.75 0 10-1.06-1.06 5 5 0 007.07 0z" clipRule="evenodd" /></svg>
+          </button>
+          <button
             type="submit"
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
             disabled={!newTodo.trim()}
           >
             Add
           </button>
+          {showEmojiPicker && (
+            <div ref={emojiPickerRef} className="absolute z-10 top-full right-0 mt-2">
+              <EmojiPicker
+                onEmojiClick={onEmojiClick}
+                autoFocusSearch={false}
+                height={400}
+                width={350}
+                theme={resolvedTheme === 'dark' ? EmojiTheme.DARK : EmojiTheme.LIGHT}
+                lazyLoadEmojis={true}
+                searchPlaceholder="Search emojis..."
+              />
+            </div>
+          )}
         </div>
       </form>
 
