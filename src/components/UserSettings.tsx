@@ -4,13 +4,14 @@ import { useState, useEffect } from 'react';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase/firebase';
 import { useAuth } from '@/lib/hooks/useAuth';
+import { useError } from '@/lib/hooks/useError';
+import { useTheme } from '@/lib/contexts/ThemeContext';
 import Image from 'next/image';
 
-interface UserSettings {
+interface UserSettingsState {
   displayName: string;
   email: string;
   photoURL: string;
-  theme: 'light' | 'dark' | 'system';
   notifications: {
     email: boolean;
     push: boolean;
@@ -19,13 +20,17 @@ interface UserSettings {
   timezone: string;
 }
 
+type ThemeValue = 'light' | 'dark' | 'system';
+
 export default function UserSettings() {
   const { user } = useAuth();
-  const [settings, setSettings] = useState<UserSettings>({
+  const { reportError } = useError();
+  const { theme, setTheme } = useTheme();
+
+  const [settings, setSettings] = useState<UserSettingsState>({
     displayName: '',
     email: '',
     photoURL: '',
-    theme: 'system',
     notifications: {
       email: true,
       push: true,
@@ -41,9 +46,11 @@ export default function UserSettings() {
   useEffect(() => {
     const fetchSettings = async () => {
       if (!user) return;
-
+      setLoading(true);
+      setError('');
       try {
-        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        const userDocRef = doc(db, 'users', user.uid);
+        const userDoc = await getDoc(userDocRef);
         if (userDoc.exists()) {
           const data = userDoc.data();
           setSettings(prev => ({
@@ -51,25 +58,37 @@ export default function UserSettings() {
             displayName: data.displayName || user.displayName || '',
             email: data.email || user.email || '',
             photoURL: data.photoURL || user.photoURL || '',
-            theme: data.theme || 'system',
-            notifications: data.notifications || {
-              email: true,
-              push: true,
-            },
+            notifications: data.notifications || { email: true, push: true },
             language: data.language || 'en',
             timezone: data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
           }));
+          const firestoreTheme = data.theme || 'system';
+          console.log("Setting theme from Firestore:", firestoreTheme);
+          setTheme(firestoreTheme);
+        } else {
+           setSettings(prev => ({
+               ...prev,
+               displayName: user.displayName || '',
+               email: user.email || '',
+               photoURL: user.photoURL || '',
+               timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+           }));
+           console.log("User doc not found, using default system theme");
+           setTheme('system');
         }
       } catch (error) {
         console.error('Error fetching user settings:', error);
         setError('Failed to load settings');
+        if (error instanceof Error) {
+          reportError(error, { component: 'UserSettings', operation: 'fetchSettings' });
+        }
       } finally {
         setLoading(false);
       }
     };
 
     fetchSettings();
-  }, [user]);
+  }, [user, reportError, setTheme]);
 
   const handleSave = async () => {
     if (!user) return;
@@ -83,104 +102,135 @@ export default function UserSettings() {
         displayName: settings.displayName,
         email: settings.email,
         photoURL: settings.photoURL,
-        theme: settings.theme,
         notifications: settings.notifications,
         language: settings.language,
         timezone: settings.timezone,
         updatedAt: new Date(),
       });
       setSuccess('Settings saved successfully');
+      setTimeout(() => setSuccess(''), 3000);
     } catch (error) {
       console.error('Error saving settings:', error);
       setError('Failed to save settings');
+      if (error instanceof Error) {
+        reportError(error, { component: 'UserSettings', operation: 'handleSave' });
+      }
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleThemeChange = async (mode: ThemeValue) => {
+    if (!user) return;
+    setTheme(mode);
+    try {
+      await updateDoc(doc(db, 'users', user.uid), { theme: mode });
+      console.log(`Theme preference ${mode} saved to Firestore.`);
+    } catch (err) {
+       console.error("Failed to save theme preference to Firestore:", err);
+       setError('Failed to save theme preference.');
+       if (err instanceof Error) {
+         reportError(err, { component: 'UserSettings', operation: 'saveThemePreference', newTheme: mode });
+       }
     }
   };
 
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 dark:border-blue-400"></div>
       </div>
     );
   }
 
   return (
     <div className="max-w-2xl mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-6 text-gray-900">User Settings</h1>
+      <h1 className="text-2xl font-bold mb-6 text-gray-900 dark:text-gray-100">User Settings</h1>
 
       <div className="space-y-6">
-        {/* Profile Section */}
-        <div className="bg-white p-6 rounded-lg shadow">
-          <h2 className="text-xl font-semibold mb-4 text-gray-900">Profile</h2>
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+          <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-gray-100">Profile</h2>
           <div className="space-y-4">
             <div className="flex items-center space-x-4">
-              <div className="relative w-20 h-20 rounded-full overflow-hidden">
+              <div className="relative w-20 h-20 rounded-full overflow-hidden border dark:border-gray-700">
                 {settings.photoURL ? (
                   <Image
                     src={settings.photoURL}
                     alt="Profile"
                     fill
                     className="object-cover"
+                    sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+                    priority
                   />
                 ) : (
-                  <div className="w-full h-full bg-gray-200 flex items-center justify-center">
-                    <span className="text-2xl text-gray-500">
-                      {settings.displayName?.[0] || '?'}
+                  <div className="w-full h-full bg-gray-200 dark:bg-gray-600 flex items-center justify-center">
+                    <span className="text-2xl text-gray-500 dark:text-gray-300">
+                      {settings.displayName?.[0]?.toUpperCase() || '?'}
                     </span>
                   </div>
                 )}
               </div>
               <div className="flex-1">
+                <label htmlFor="displayName" className="sr-only">Display Name</label>
                 <input
+                  id="displayName"
                   type="text"
                   value={settings.displayName}
                   onChange={(e) => setSettings({ ...settings, displayName: e.target.value })}
                   placeholder="Display Name"
-                  className="w-full p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                  className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
                 />
               </div>
             </div>
             <div>
+              <label htmlFor="email" className="sr-only">Email</label>
               <input
+                id="email"
                 type="email"
                 value={settings.email}
                 onChange={(e) => setSettings({ ...settings, email: e.target.value })}
                 placeholder="Email"
-                className="w-full p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
               />
             </div>
           </div>
         </div>
 
-        {/* Preferences Section */}
-        <div className="bg-white p-6 rounded-lg shadow">
-          <h2 className="text-xl font-semibold mb-4 text-gray-900">Preferences</h2>
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+          <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-gray-100">Preferences</h2>
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Theme
               </label>
-              <select
-                value={settings.theme}
-                onChange={(e) => setSettings({ ...settings, theme: e.target.value as 'light' | 'dark' | 'system' })}
-                className="w-full p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
-              >
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-                <option value="system">System</option>
-              </select>
+              <div className="flex items-center space-x-4">
+                {(['light', 'dark', 'system'] as const).map((mode) => (
+                  <label key={mode} className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="theme"
+                      value={mode}
+                      checked={theme === mode}
+                      onChange={() => handleThemeChange(mode)}
+                      className="form-radio h-4 w-4 text-blue-600 transition duration-150 ease-in-out focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600"
+                    />
+                    <span className="text-sm text-gray-700 dark:text-gray-300 capitalize">
+                      {mode}
+                    </span>
+                  </label>
+                ))}
+              </div>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label htmlFor="language" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Language
               </label>
               <select
+                id="language"
                 value={settings.language}
                 onChange={(e) => setSettings({ ...settings, language: e.target.value })}
-                className="w-full p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
               >
                 <option value="en">English</option>
                 <option value="de">German</option>
@@ -190,17 +240,18 @@ export default function UserSettings() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label htmlFor="timezone" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Timezone
               </label>
               <select
+                id="timezone"
                 value={settings.timezone}
                 onChange={(e) => setSettings({ ...settings, timezone: e.target.value })}
-                className="w-full p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
               >
                 {Intl.supportedValuesOf('timeZone').map((tz) => (
                   <option key={tz} value={tz}>
-                    {tz}
+                    {tz.replace(/_/g, ' ')}
                   </option>
                 ))}
               </select>
@@ -208,12 +259,11 @@ export default function UserSettings() {
           </div>
         </div>
 
-        {/* Notifications Section */}
-        <div className="bg-white p-6 rounded-lg shadow">
-          <h2 className="text-xl font-semibold mb-4 text-gray-900">Notifications</h2>
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+          <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-gray-100">Notifications</h2>
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <label className="text-sm font-medium text-gray-700">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
                 Email Notifications
               </label>
               <input
@@ -223,11 +273,11 @@ export default function UserSettings() {
                   ...settings,
                   notifications: { ...settings.notifications, email: e.target.checked }
                 })}
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                className="form-checkbox h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 dark:border-gray-600 rounded dark:bg-gray-700"
               />
             </div>
             <div className="flex items-center justify-between">
-              <label className="text-sm font-medium text-gray-700">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
                 Push Notifications
               </label>
               <input
@@ -237,30 +287,31 @@ export default function UserSettings() {
                   ...settings,
                   notifications: { ...settings.notifications, push: e.target.checked }
                 })}
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                className="form-checkbox h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 dark:border-gray-600 rounded dark:bg-gray-700"
               />
             </div>
           </div>
         </div>
 
-        {/* Error and Success Messages */}
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
-            {error}
+          <div className="bg-red-100 dark:bg-red-900 border border-red-400 dark:border-red-700 text-red-700 dark:text-red-200 px-4 py-3 rounded relative" role="alert">
+            <span className="block sm:inline">{error}</span>
           </div>
         )}
         {success && (
-          <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded">
-            {success}
+          <div className="bg-green-100 dark:bg-green-900 border border-green-400 dark:border-green-700 text-green-700 dark:text-green-200 px-4 py-3 rounded relative" role="alert">
+            <span className="block sm:inline">{success}</span>
+            <span className="absolute top-0 bottom-0 right-0 px-4 py-3" onClick={() => setSuccess('')}>
+              <svg className="fill-current h-6 w-6 text-green-500 dark:text-green-300" role="button" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><title>Close</title><path d="M14.348 14.849a1.2 1.2 0 0 1-1.697 0L10 11.819l-2.651 3.029a1.2 1.2 0 1 1-1.697-1.697l2.758-3.15-2.759-3.152a1.2 1.2 0 1 1 1.697-1.697L10 8.183l2.651-3.031a1.2 1.2 0 1 1 1.697 1.697l-2.758 3.152 2.758 3.15a1.2 1.2 0 0 1 0 1.698z"/></svg>
+            </span>
           </div>
         )}
 
-        {/* Save Button */}
-        <div className="flex justify-end">
+        <div className="flex justify-end pt-2">
           <button
             onClick={handleSave}
             disabled={saving}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-offset-gray-800 disabled:opacity-50"
           >
             {saving ? 'Saving...' : 'Save Settings'}
           </button>
@@ -268,4 +319,4 @@ export default function UserSettings() {
       </div>
     </div>
   );
-} 
+}

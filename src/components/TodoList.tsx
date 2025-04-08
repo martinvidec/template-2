@@ -132,6 +132,7 @@ export default function TodoList() {
     }
   };
 
+  // Combined loading state
   const isLoading = authLoading || loadingOwn || loadingShared;
 
   if (isLoading) {
@@ -159,7 +160,7 @@ export default function TodoList() {
             value={newTodo}
             onChange={(e) => setNewTodo(e.target.value)}
             placeholder="Add a new todo..."
-            className="flex-1 p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600"
+            className="flex-1 p-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
           />
           <button
             type="submit"

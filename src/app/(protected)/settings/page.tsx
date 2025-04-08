@@ -8,7 +8,7 @@ export const metadata: Metadata = {
 
 export default function SettingsPage() {
   return (
-    <main className="min-h-screen bg-gray-50 py-8">
+    <main className="min-h-screen bg-gray-50 dark:bg-gray-900 py-8">
       <UserSettings />
     </main>
   );

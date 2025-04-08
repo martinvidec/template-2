@@ -5,6 +5,9 @@ import { signInWithPopup, GoogleAuthProvider, signOut as firebaseSignOut, onAuth
 import { User } from "firebase/auth";
 import { auth, db } from "../firebase/firebase";
 import { doc, setDoc, getDoc, onSnapshot, Unsubscribe } from 'firebase/firestore';
+import { useRouter } from 'next/navigation';
+import { useTheme } from './ThemeContext';
+import type { Theme as ThemeValue } from './ThemeContext';
 
 interface AuthContextType {
   user: User | null;
@@ -19,61 +22,78 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const unsubscribeRef = useRef<Unsubscribe | null>(null);
+  const router = useRouter();
+  const { setTheme } = useTheme();
 
   useEffect(() => {
     console.log("Setting up auth state listener");
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      console.log("Auth state changed:", user ? "User logged in" : "No user");
-      if (user) {
+    const unsubscribeAuthState = onAuthStateChanged(auth, async (authUser) => {
+      console.log("Auth state changed:", authUser ? `User logged in (${authUser.uid})` : "No user");
+      if (unsubscribeRef.current) {
+        console.log("Cleaning up previous user doc listener due to auth state change.");
+        unsubscribeRef.current();
+        unsubscribeRef.current = null;
+      }
+      
+      if (authUser) {
+        const userDocRef = doc(db, 'users', authUser.uid);
         try {
-          // Check if user document exists
-          const userDocRef = doc(db, 'users', user.uid);
-          const userDoc = await getDoc(userDocRef);
-
-          if (!userDoc.exists()) {
-            // Create user document if it doesn't exist
-            await setDoc(userDocRef, {
-              email: user.email,
-              displayName: user.displayName,
-              photoURL: user.photoURL,
-              createdAt: new Date(),
-              theme: 'system',
-              notifications: {
-                email: true,
-                push: true,
-              },
-              language: 'en',
-              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            });
-          }
-
-          // Set up real-time listener for user document
-          unsubscribeRef.current = onSnapshot(userDocRef, (doc) => {
-            if (doc.exists()) {
-              console.log("User document updated");
+          unsubscribeRef.current = onSnapshot(userDocRef, (docSnap) => {
+            if (docSnap.exists()) {
+              const data = docSnap.data();
+              console.log("User document snapshot received:", data);
+              const firestoreTheme = data.theme || 'system';
+              console.log("Setting theme from Firestore snapshot:", firestoreTheme);
+              setTheme(firestoreTheme as ThemeValue);
+              
+              setUser(authUser);
+            } else {
+              console.log("User document does not exist, creating...");
+              setDoc(userDocRef, {
+                email: authUser.email,
+                displayName: authUser.displayName,
+                photoURL: authUser.photoURL,
+                createdAt: new Date(),
+                theme: 'system',
+                notifications: { email: true, push: true },
+                language: 'en',
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+              }).then(() => {
+                 console.log("User document created, setting theme to system default.");
+                 setTheme('system');
+                 setUser(authUser);
+              }).catch(creationError => {
+                 console.error("Error creating user document:", creationError);
+                 setUser(authUser);
+              });
             }
+            if (loading) setLoading(false);
+          }, (error) => {
+              console.error("Error in user document snapshot listener:", error);
+              setUser(authUser);
+              if (loading) setLoading(false);
           });
         } catch (error) {
-          console.error("Error creating/updating user document:", error);
+          console.error("Error setting up user document listener:", error);
+          setUser(authUser);
+          if (loading) setLoading(false);
         }
       } else {
-        // Clean up Firestore listener when user signs out
-        if (unsubscribeRef.current) {
-          unsubscribeRef.current();
-          unsubscribeRef.current = null;
-        }
+        setUser(null);
+        if (loading) setLoading(false);
       }
-      setUser(user);
-      setLoading(false);
     });
 
     return () => {
-      unsubscribe();
+      console.log("Cleaning up auth state listener");
+      unsubscribeAuthState();
       if (unsubscribeRef.current) {
+        console.log("Cleaning up user doc listener on component unmount");
         unsubscribeRef.current();
+        unsubscribeRef.current = null;
       }
     };
-  }, []);
+  }, [setTheme, loading]);
 
   const signInWithGoogle = async () => {
     console.log("Starting Google sign in process");
@@ -101,14 +121,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOutUser = async () => {
     try {
       console.log("Starting sign out process");
-      // Clean up Firestore listener before signing out
       if (unsubscribeRef.current) {
+        console.log("Cleaning up user doc listener before sign out");
         unsubscribeRef.current();
         unsubscribeRef.current = null;
       }
-      setUser(null);
       await firebaseSignOut(auth);
-      console.log("Sign out successful");
+      console.log("Sign out successful, redirecting to login page...");
+      router.push('/login');
     } catch (error: any) {
       console.error("Error signing out:", error.message);
     }

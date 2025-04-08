@@ -133,14 +133,14 @@ export default function Todo({ id, text, completed, userId, sharedWith = [], isO
             checked={completed}
             onChange={toggleComplete}
             disabled={!canEdit}
-            className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 dark:focus:ring-offset-gray-800 dark:bg-gray-700 dark:border-gray-600"
+            className="form-checkbox h-4 w-4 text-blue-600 transition duration-150 ease-in-out bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:checked:bg-blue-500 dark:focus:ring-offset-gray-800"
           />
           {isEditing ? (
             <input
               type="text"
               value={editedText}
               onChange={(e) => setEditedText(e.target.value)}
-              className="flex-1 p-1 border rounded text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700 dark:border-gray-600"
+              className="flex-1 p-1 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
               autoFocus
               onBlur={handleEdit}
               onKeyDown={(e) => e.key === 'Enter' && handleEdit()}
