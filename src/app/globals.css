@@ -25,3 +25,148 @@ body {
     text-wrap: balance;
   }
 }
+
+/* === Custom Tiptap ProseMirror Styles === */
+/* Ensure these come AFTER Tailwind base/component/utility imports/directives */
+
+.ProseMirror {
+  /* Base focus style if needed, though handled by editorProps class */
+  /* outline: none; */ 
+  /* Ensure good contrast in light mode */
+  color: #111827 !important; /* Tailwind gray-900 */
+}
+
+/* Dark mode text color override */
+:is(.dark .ProseMirror) {
+   color: #f3f4f6 !important; /* Tailwind gray-100 */
+}
+
+/* Headings within Tiptap Editor */
+.ProseMirror h2 {
+  font-size: 1.25em !important; /* Adjust size as needed */
+  font-weight: 600 !important;
+  margin-top: 1em !important;
+  margin-bottom: 0.5em !important;
+}
+
+.ProseMirror h3 {
+  font-size: 1.1em !important; /* Adjust size as needed */
+  font-weight: 600 !important;
+  margin-top: 0.8em !important;
+  margin-bottom: 0.4em !important;
+}
+
+/* Blockquotes within Tiptap Editor */
+.ProseMirror blockquote {
+  margin-left: 1rem !important;
+  padding-left: 0.75rem !important;
+  border-left-width: 4px !important;
+  /* Use Tailwind CSS variable or direct color */
+  /* border-color: theme('colors.gray.300') !important; */ 
+  border-color: #d1d5db !important; /* Assuming default gray-300 */
+  font-style: italic !important;
+}
+
+/* Standard Lists within Tiptap Editor */
+/* Target specifically lists NOT inside a task item */
+.ProseMirror ul:not([data-type="taskList"]) {
+  list-style-type: disc !important;
+  padding-left: 1.5rem !important; /* Adjust indentation */
+  margin-top: 0.5em !important;
+  margin-bottom: 0.5em !important;
+}
+
+.ProseMirror ol {
+  list-style-type: decimal !important;
+  padding-left: 1.5rem !important; /* Adjust indentation */
+  margin-top: 0.5em !important;
+  margin-bottom: 0.5em !important;
+}
+
+.ProseMirror li > p {
+    /* Prevent extra margins on paragraphs inside list items */
+    margin-top: 0.1em !important;
+    margin-bottom: 0.1em !important;
+}
+
+/* Code Blocks within Tiptap Editor */
+.ProseMirror pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important; /* Ensure monospace */
+  background-color: #f3f4f6 !important; /* Tailwind gray-100 */
+  padding: 0.75rem !important;
+  border-radius: 0.375rem !important;
+  margin-top: 1em !important;
+  margin-bottom: 1em !important;
+  white-space: pre-wrap !important; /* Allow wrapping */
+}
+
+.ProseMirror code {
+   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important; /* Ensure monospace */
+  /* Reset potential extra styling from prose */
+  background-color: transparent !important;
+  padding: 0 !important;
+  font-weight: inherit !important;
+}
+
+/* Dark mode specific overrides if needed */
+:is(.dark .ProseMirror blockquote) {
+   border-color: #4b5563 !important; /* Assuming default dark gray-600/700 */
+}
+
+:is(.dark .ProseMirror pre) {
+  background-color: #374151 !important; /* Tailwind gray-700 */
+}
+
+/* Ensure TaskList Checkboxes are still visible and clickable */
+/* Target li elements that are direct children of a taskList ul */
+.ProseMirror ul[data-type="taskList"] > li {
+  list-style-type: none;
+  margin-left: 0; 
+  padding-left: 0;
+  display: flex;
+  align-items: flex-start; 
+  gap: 0.5em; 
+}
+.ProseMirror ul[data-type="taskList"] > li > label {
+  display: inline-flex; 
+  align-items: center;
+  margin-top: 0.2em; 
+  flex-shrink: 0; 
+}
+.ProseMirror ul[data-type="taskList"] > li > label input[type="checkbox"] {
+  margin-right: 0.5em;
+}
+.ProseMirror ul[data-type="taskList"] > li > div {
+  flex-grow: 1;
+  margin: 0; 
+}
+.ProseMirror ul[data-type="taskList"] > li > div > p {
+  margin: 0;
+  display: inline; 
+}
+
+/* Styling for Mentions */
+.ProseMirror .mention {
+  color: #1d4ed8; /* Tailwind blue-700 */
+  font-weight: 600; /* ADDED semi-bold */
+}
+
+:is(.dark .ProseMirror .mention) {
+  color: #bfdbfe; /* Tailwind blue-200 */
+  font-weight: 600; /* ADDED semi-bold */
+}
+
+/* Styling for Links */
+.ProseMirror a {
+  color: #2563eb; /* Tailwind blue-600 */
+  text-decoration: none; /* No underline by default */
+  cursor: pointer;
+}
+
+.ProseMirror a:hover {
+  text-decoration: underline; /* Underline on hover */
+}
+
+:is(.dark .ProseMirror a) {
+  color: #60a5fa; /* Tailwind blue-400 */
+}

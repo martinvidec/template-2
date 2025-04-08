@@ -1,43 +1,89 @@
 import { useState, useEffect, useRef } from 'react';
-import { collection, addDoc, query, onSnapshot, orderBy, where, doc, getDoc, getDocs, collectionGroup } from 'firebase/firestore';
+import { collection, addDoc, query, onSnapshot, orderBy, where, doc, getDoc, getDocs, collectionGroup, limit, startAt, endAt } from 'firebase/firestore';
 import { db } from '@/lib/firebase/firebase';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { useError } from '@/lib/hooks/useError';
 import Todo from './Todo';
-import EmojiPicker, { EmojiClickData, Theme as EmojiTheme } from 'emoji-picker-react';
 import { useTheme } from '@/lib/contexts/ThemeContext';
+
+// Import Tiptap
+import { useEditor, EditorContent } from '@tiptap/react';
+import { useTiptapConfig } from '@/lib/hooks/useTiptapConfig';
+
+// Import Suggestion List and its Ref type
+import TiptapToolbar from './TiptapToolbar';
+
+// Import the extracted suggestion config
+import { suggestionConfigUtility } from '@/lib/tiptap/mentionSuggestion';
+
+// Import list items manually
+import ListItem from '@tiptap/extension-list-item';
+import BulletList from '@tiptap/extension-bullet-list';
+import OrderedList from '@tiptap/extension-ordered-list';
+import CodeBlock from '@tiptap/extension-code-block'; // Import CodeBlock
 
 interface TodoItem {
   id: string;
-  text: string;
+  // Switch to storing content as JSON
+  text?: string; // Keep for potential fallback/migration
+  content: any | null; // Store Tiptap JSON content
   completed: boolean;
   createdAt: Date;
   sharedWith?: string[];
   ownerId: string;
 }
 
+// Helper function to extract mention UIDs from Tiptap JSON
+const extractMentionIds = (node: any): string[] => {
+  let ids: string[] = [];
+  if (node.type === 'mention' && node.attrs?.id) {
+    ids.push(node.attrs.id);
+  }
+  if (node.content) {
+    node.content.forEach((childNode: any) => {
+      ids = ids.concat(extractMentionIds(childNode));
+    });
+  }
+  // Remove duplicates
+  return [...new Set(ids)]; 
+};
+
 export default function TodoList() {
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [sharedTodos, setSharedTodos] = useState<TodoItem[]>([]);
-  const [newTodo, setNewTodo] = useState('');
   const { user, loading: authLoading } = useAuth();
   const { reportError } = useError();
   const { resolvedTheme } = useTheme();
   const [loadingOwn, setLoadingOwn] = useState(true);
   const [loadingShared, setLoadingShared] = useState(true);
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const emojiPickerRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [isInCodeBlock, setIsInCodeBlock] = useState(false); // State for code block hint
 
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (emojiPickerRef.current && !emojiPickerRef.current.contains(event.target as Node)) {
-        setShowEmojiPicker(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  // Get editor config from the hook
+  const { extensions, editorProps } = useTiptapConfig({
+    editable: true,
+    placeholder: 'Add a new todo... Type @ to mention users.',
+    enableMentionSuggestion: true,
+  });
+
+  // --- Tiptap Editor Initialization using the hook config ---
+  const editor = useEditor({
+    extensions,
+    editorProps,
+    content: '', // Initial content remains empty
+    immediatelyRender: false,
+    // Add event listener for selection updates
+    onSelectionUpdate: ({ editor }) => {
+      setIsInCodeBlock(editor.isActive('codeBlock'));
+    },
+    // Also check on initial creation or content updates
+    onCreate: ({ editor }) => {
+      setIsInCodeBlock(editor.isActive('codeBlock'));
+    },
+    onUpdate: ({ editor }) => {
+       // Optional: Also update on general updates if needed, but selection is often enough
+       // setIsInCodeBlock(editor.isActive('codeBlock'));
+    },
+  });
 
   useEffect(() => {
     if (!user) {
@@ -53,66 +99,53 @@ export default function TodoList() {
     setLoadingOwn(true);
     setLoadingShared(true);
 
-    // --- Listener for Own Todos ---
-    const qOwn = query(
-      collection(db, `users/${user.uid}/todos`),
-      orderBy('createdAt', 'desc')
-    );
-
-    const unsubscribeOwn = onSnapshot(qOwn,
-      (snapshot) => {
-        console.log("Own todos snapshot received");
-        const todosData = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ownerId: user.uid,
-          ...(doc.data() as Omit<TodoItem, 'id' | 'ownerId'>),
-        }));
-        setTodos(todosData);
-        setLoadingOwn(false);
-      },
-      (error) => {
-        console.error("Error fetching own todos:", error);
-        reportError(error, { component: 'TodoList', operation: 'fetchOwnTodosSnapshot' });
-        setLoadingOwn(false);
-      }
-    );
-
-    // --- Listener for Shared Todos (using collectionGroup) ---
-    console.log(`Setting up shared todos listener for user ${user.uid}`);
-    const qShared = query(
-      collectionGroup(db, 'todos'),
-      where('sharedWith', 'array-contains', user.uid)
-    );
-
-    const unsubscribeShared = onSnapshot(qShared, 
-      (snapshot) => {
-        console.log("Shared todos snapshot received", snapshot.docs.length, "docs");
-        const sharedTodosData = snapshot.docs.map((doc) => {
-          const ownerId = doc.ref.parent.parent?.id;
-          if (!ownerId) {
-             console.warn("Could not determine ownerId for shared todo:", doc.id);
-             return null; 
-          }
-          if (ownerId === user.uid) {
-              return null;
-          }
+    // Adapt onSnapshot callbacks to handle potential 'content' field
+    const handleSnapshot = (snapshot: any, isOwn: boolean) => {
+      const todosData = snapshot.docs.map((doc: any) => {
+          const data = doc.data();
+          const ownerId = isOwn ? user.uid : doc.ref.parent.parent?.id;
+          if (!isOwn && ownerId === user.uid) return null; // Filter own todos from shared
+          if (!ownerId) return null; // Should not happen for own, check for shared
+          
           return {
             id: doc.id,
             ownerId: ownerId,
-            ...(doc.data() as Omit<TodoItem, 'id' | 'ownerId'>),
+            // Prioritize content field, fall back to text
+            content: data.content || null, 
+            text: data.text || '', // Keep text for now
+            completed: data.completed ?? false,
+            // Convert Firestore Timestamp to Date
+            createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(), 
+            sharedWith: data.sharedWith || [],
           };
-        }).filter((todo): todo is TodoItem => todo !== null);
+      }).filter((todo: any): todo is TodoItem => todo !== null);
 
-        console.log("Processed shared todos:", sharedTodosData);
-        setSharedTodos(sharedTodosData);
-        setLoadingShared(false);
-      },
-      (error) => {
-        console.error("Error fetching shared todos snapshot:", error);
-        reportError(error, { component: 'TodoList', operation: 'fetchSharedTodosSnapshot' });
-        setLoadingShared(false);
+      if (isOwn) {
+          setTodos(todosData);
+          setLoadingOwn(false);
+      } else {
+          // Filter out potential duplicates if a todo is both owned and shared (shouldn't happen with current logic)
+          const uniqueShared = todosData.filter((st: TodoItem) => !todos.some(ot => ot.id === st.id));
+          setSharedTodos(uniqueShared);
+          setLoadingShared(false);
       }
-    );
+    };
+
+    // Own Todos Listener
+    const qOwn = query(collection(db, `users/${user.uid}/todos`), orderBy('createdAt', 'desc'));
+    const unsubscribeOwn = onSnapshot(qOwn, (snapshot) => handleSnapshot(snapshot, true), (error) => {
+       console.error("Error fetching own todos:", error);
+       reportError(error, { component: 'TodoList', operation: 'fetchOwnTodosSnapshot' });
+       setLoadingOwn(false);
+    });
+
+    // Shared Todos Listener
+    const qShared = query(collectionGroup(db, 'todos'), where('sharedWith', 'array-contains', user.uid));
+    const unsubscribeShared = onSnapshot(qShared, (snapshot) => handleSnapshot(snapshot, false), (error) => {
+       console.error("Error fetching shared todos snapshot:", error);
+       reportError(error, { component: 'TodoList', operation: 'fetchSharedTodosSnapshot' });
+       setLoadingShared(false);
+    });
 
     return () => {
       console.log(`Cleaning up listeners for user ${user.uid}`);
@@ -121,23 +154,34 @@ export default function TodoList() {
     };
   }, [user, reportError]);
 
+  // --- Update Add Todo function to save JSON content AND mentionedUsers ---
   const addTodo = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTodo.trim() || !user) {
-      console.log("Cannot add todo: no text or no user logged in.");
-      return;
+    if (!user || !editor) return;
+
+    const contentJSON = editor.getJSON();
+    const contentText = editor.getText().trim();
+
+    if (!contentText) { 
+       console.log("Cannot add empty todo.");
+       editor.commands.clearContent();
+       return;
     }
 
+    // Extract mentioned user IDs
+    const mentionedUserIds = extractMentionIds(contentJSON);
+    console.log("Mentioned User IDs found:", mentionedUserIds);
+
     try {
-      console.log(`Adding new todo for user ${user.uid}`);
       await addDoc(collection(db, `users/${user.uid}/todos`), {
-        text: newTodo,
+        content: contentJSON, 
+        text: editor.getText(),
         completed: false,
         createdAt: new Date(),
-        sharedWith: [],
+        sharedWith: [], // sharedWith is for explicit sharing, not mentions
+        mentionedUsers: mentionedUserIds, // Save the extracted UIDs
       });
-      console.log("Todo added successfully");
-      setNewTodo('');
+      editor.commands.clearContent(true);
     } catch (error) {
       console.error("Error adding todo:", error);
       if (error instanceof Error) {
@@ -148,17 +192,12 @@ export default function TodoList() {
     }
   };
 
-  const onEmojiClick = (emojiData: EmojiClickData, event: MouseEvent) => {
-    const cursorPosition = inputRef.current?.selectionStart ?? newTodo.length;
-    const textBefore = newTodo.substring(0, cursorPosition);
-    const textAfter = newTodo.substring(cursorPosition);
-    setNewTodo(textBefore + emojiData.emoji + textAfter);
-    setShowEmojiPicker(false);
-    inputRef.current?.focus();
-    setTimeout(() => {
-      inputRef.current?.setSelectionRange(cursorPosition + emojiData.emoji.length, cursorPosition + emojiData.emoji.length);
-    }, 0);
-  };
+  // Cleanup editor instance
+  useEffect(() => {
+    return () => {
+      editor?.destroy();
+    };
+  }, [editor]);
 
   const isLoading = authLoading || loadingOwn || loadingShared;
 
@@ -181,43 +220,33 @@ export default function TodoList() {
   return (
     <div className="max-w-2xl mx-auto p-4">
       <form onSubmit={addTodo} className="mb-4">
-        <div className="flex items-center gap-2 relative">
-          <input
-            ref={inputRef}
-            type="text"
-            value={newTodo}
-            onChange={(e) => setNewTodo(e.target.value)}
-            placeholder="Add a new todo..."
-            className="flex-1 p-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
-          />
-          <button
-            type="button"
-            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-            className="p-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 rounded-full hover:bg-gray-100 dark:hover:bg-gray-600"
-            aria-label="Add emoji"
-          >
-            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM7 9a1 1 0 100-2 1 1 0 000 2zm7-1a1 1 0 11-2 0 1 1 0 012 0zm-.464 5.535a.75.75 0 10-1.06 1.06 3.5 3.5 0 01-4.95 0 .75.75 0 10-1.06-1.06 5 5 0 007.07 0z" clipRule="evenodd" /></svg>
-          </button>
-          <button
-            type="submit"
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-            disabled={!newTodo.trim()}
-          >
-            Add
-          </button>
-          {showEmojiPicker && (
-            <div ref={emojiPickerRef} className="absolute z-10 top-full right-0 mt-2">
-              <EmojiPicker
-                onEmojiClick={onEmojiClick}
-                autoFocusSearch={false}
-                height={400}
-                width={350}
-                theme={resolvedTheme === 'dark' ? EmojiTheme.DARK : EmojiTheme.LIGHT}
-                lazyLoadEmojis={true}
-                searchPlaceholder="Search emojis..."
-              />
-            </div>
-          )}
+        <div className="border border-gray-300 dark:border-gray-600 rounded-lg">
+          <TiptapToolbar editor={editor} />
+          <div className="flex-1 p-2 bg-white dark:bg-gray-700">
+            <EditorContent 
+              editor={editor} 
+            />
+          </div>
+        </div>
+
+        {/* Container for button and hint */}
+        <div className="flex justify-between items-center mt-2"> 
+           {/* Hint text - shown only when in code block */}
+           <div className="flex-1 text-left"> {/* Takes up space to push button right */} 
+             {isInCodeBlock && (
+               <p className="text-xs text-gray-500 dark:text-gray-400">
+                 Use Cmd/Ctrl+Enter to exit code block.
+               </p>
+             )}
+           </div>
+           {/* Add Todo Button */}
+           <button
+             type="submit"
+             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 text-sm ml-2" // Add margin if needed
+             disabled={!editor || editor.getText().trim().length === 0}
+           >
+             Add Todo
+           </button>
         </div>
       </form>
 
@@ -230,9 +259,10 @@ export default function TodoList() {
               <Todo
                 key={`${todo.ownerId}-${todo.id}`}
                 id={todo.id}
-                text={todo.text}
+                content={todo.content}
+                text={todo.text || ''} // Provide fallback for optional text
                 completed={todo.completed}
-                userId={todo.ownerId}
+                userId={todo.ownerId} 
                 sharedWith={todo.sharedWith}
                 isOwner={true}
               />
@@ -248,7 +278,8 @@ export default function TodoList() {
                 <Todo
                   key={`${todo.ownerId}-${todo.id}`}
                   id={todo.id}
-                  text={todo.text}
+                  content={todo.content}
+                  text={todo.text || ''} // Provide fallback for optional text
                   completed={todo.completed}
                   userId={todo.ownerId}
                   sharedWith={todo.sharedWith}

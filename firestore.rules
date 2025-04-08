@@ -31,18 +31,29 @@ service cloud.firestore {
       }
     }
 
-    // --- RULE FOR 'todos' COLLECTION GROUP QUERY ---
-    // This allows the collectionGroup query used in TodoList to fetch shared todos.
+    // --- RULE FOR 'todos' COLLECTION GROUP QUERY (Shared With) ---
     match /{path=**}/todos/{todoId} {
-       // Allow reading documents from the collection group query IF:
-       // 1. User is authenticated AND
-       // 2. EITHER the user's UID matches the owner path segment (path[1] assuming 'users/{userId}')
-       //    OR the user's UID is present in the document's sharedWith array.
        allow read: if isAuthenticated() && (
                        request.auth.uid == path[1] || 
                        (resource.data.sharedWith != null && request.auth.uid in resource.data.sharedWith)
                     );
-        // Note: Writes (create, update, delete) are still governed by the more specific rule above.
+    }
+
+    // --- RULE FOR 'todos' COLLECTION GROUP QUERY (Mentions) ---
+    // This allows the collectionGroup query used in MentionsList.
+    match /{path=**}/todos/{todoId} {
+       // Allow reading documents from the collection group query IF:
+       // 1. User is authenticated AND
+       // 2. The user's UID is present in the document's mentionedUsers array.
+       allow read: if isAuthenticated() && 
+                      (resource.data.mentionedUsers != null && request.auth.uid in resource.data.mentionedUsers);
+        // Note: We could combine this rule with the one above, but separate can be clearer.
+        // Combined would be: 
+        // allow read: if isAuthenticated() && (
+        //                 request.auth.uid == path[1] || 
+        //                 (resource.data.sharedWith != null && request.auth.uid in resource.data.sharedWith) ||
+        //                 (resource.data.mentionedUsers != null && request.auth.uid in resource.data.mentionedUsers)
+        //              );
     }
   }
 } 

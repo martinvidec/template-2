@@ -1,10 +1,34 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { doc, updateDoc, deleteDoc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase/firebase';
 import ShareTodo from './ShareTodo';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { useError } from '@/lib/hooks/useError';
 import Image from 'next/image';
+
+// Tiptap imports - REMOVE specific extension imports here
+import { useEditor, EditorContent } from '@tiptap/react';
+// import StarterKit from '@tiptap/starter-kit';
+// ... remove others ...
+
+import TiptapToolbar from './TiptapToolbar';
+// Import the configuration hook
+import { useTiptapConfig } from '@/lib/hooks/useTiptapConfig';
+
+// --- Helper function to extract mention UIDs --- 
+const extractMentionIds = (node: any): string[] => {
+  let ids: string[] = [];
+  if (node.type === 'mention' && node.attrs?.id) {
+    ids.push(node.attrs.id);
+  }
+  if (node.content) {
+    node.content.forEach((childNode: any) => {
+      ids = ids.concat(extractMentionIds(childNode));
+    });
+  }
+  return [...new Set(ids)]; 
+};
+// --- End Helper --- 
 
 interface UserInfo {
   uid: string;
@@ -15,7 +39,8 @@ interface UserInfo {
 
 interface TodoProps {
   id: string;
-  text: string;
+  content: any | null;
+  text?: string;
   completed: boolean;
   userId: string;
   sharedWith?: string[];
@@ -23,16 +48,87 @@ interface TodoProps {
   originalUserId?: string;
 }
 
-export default function Todo({ id, text, completed, userId, sharedWith = [], isOwner: isOwnerProp, originalUserId }: TodoProps) {
+export default function Todo({ id, content, text, completed, userId, sharedWith = [], isOwner: isOwnerProp, originalUserId }: TodoProps) {
   const [isEditing, setIsEditing] = useState(false);
-  const [editedText, setEditedText] = useState(text);
+  const prevIsEditingRef = useRef(isEditing);
   const [showShare, setShowShare] = useState(false);
   const [users, setUsers] = useState<UserInfo[]>([]);
   const { user } = useAuth();
   const { reportError } = useError();
+  const [isInCodeBlock, setIsInCodeBlock] = useState(false);
 
   const isOwner = user?.uid === userId;
-  const canEdit = isOwner || (sharedWith ?? []).includes(user?.uid || '');
+  const canEdit = isOwner;
+  const canToggleComplete = isOwner || (sharedWith ?? []).includes(user?.uid || '');
+
+  // --- Get Editor Configurations --- 
+  const { extensions: displayExtensions, editorProps: displayEditorProps } = useTiptapConfig({
+    editable: false,
+    enableMentionSuggestion: false,
+  });
+
+  const { extensions: editExtensions, editorProps: editEditorProps } = useTiptapConfig({
+    editable: true,
+    enableMentionSuggestion: true,
+    // placeholder: 'Edit your todo...' // Add placeholder if desired
+  });
+
+  // DISPLAY Editor - using config from hook
+  const displayEditor = useEditor({
+    editable: false,
+    content: content || text || '',
+    extensions: displayExtensions,
+    editorProps: displayEditorProps,
+    immediatelyRender: false,
+  }, []);
+
+  // EDIT Editor - using config from hook
+  const editEditor = useEditor({
+    editable: true,
+    content: '', // Set dynamically via useEffect
+    extensions: editExtensions,
+    editorProps: editEditorProps, // Use props from hook
+    immediatelyRender: false,
+    // Add event listener for selection updates
+    onSelectionUpdate: ({ editor }) => {
+      setIsInCodeBlock(editor.isActive('codeBlock'));
+    },
+    // Also check on initial creation or content updates (when editing starts)
+    onCreate: ({ editor }) => {
+      setIsInCodeBlock(editor.isActive('codeBlock'));
+    },
+    // Add onFocus to reset state when editor gains focus
+    onFocus: ({ editor }) => {
+      setIsInCodeBlock(editor.isActive('codeBlock'));
+    },
+  }, []);
+
+  // --- Effects --- 
+  // Effect to update DISPLAY editor when props change
+  useEffect(() => {
+    if (displayEditor && !displayEditor.isDestroyed && !isEditing) {
+      const currentContentJSON = JSON.stringify(displayEditor.getJSON());
+      const propContentJSON = JSON.stringify(content || {});
+      const currentContentText = displayEditor.getText();
+      const propText = text || '';
+
+      // Update only if content actually differs
+      if (propContentJSON !== currentContentJSON || (Object.keys(content || {}).length === 0 && propText !== currentContentText)) {
+         console.log("(Todo) Updating displayEditor content due to prop change.");
+         displayEditor.commands.setContent(content || text || '', false); 
+      }
+    }
+    // Keep dependencies: We want this effect to run when props change or editor initializes
+  }, [content, text, displayEditor, isEditing]);
+
+  // Effect to set content for EDIT editor (remains the same)
+  useEffect(() => {
+    if (isEditing && !prevIsEditingRef.current && editEditor && !editEditor.isDestroyed) {
+      editEditor.commands.setContent(content || text || '', false);
+      editEditor.commands.focus('end');
+    }
+    prevIsEditingRef.current = isEditing;
+  }, [isEditing, editEditor, content, text]);
 
   useEffect(() => {
     const fetchUsers = async () => {
@@ -70,7 +166,7 @@ export default function Todo({ id, text, completed, userId, sharedWith = [], isO
   }, [userId, sharedWith, reportError, id]);
 
   const toggleComplete = async () => {
-    if (!canEdit) return;
+    if (!canToggleComplete) return;
     
     const todoRef = doc(db, `users/${userId}/todos/${id}`);
     try {
@@ -87,25 +183,38 @@ export default function Todo({ id, text, completed, userId, sharedWith = [], isO
     }
   };
 
-  const handleEdit = async () => {
-    if (!canEdit) return;
-    
-    if (isEditing) {
+  const handleSaveEdit = async () => {
+    if (!canEdit || !editEditor) return;
+
+    const newContentJSON = editEditor.getJSON();
+    const newContentText = editEditor.getText();
+    const newMentionedUserIds = extractMentionIds(newContentJSON);
+
+    if (newContentText.trim().length === 0) {
+        reportError(new Error("Cannot save empty todo"), { component: 'Todo', operation: 'handleSaveEdit' });
+        return;
+    }
+
+    try {
       const todoRef = doc(db, `users/${userId}/todos/${id}`);
-      try {
-        await updateDoc(todoRef, {
-          text: editedText
-        });
-      } catch (error) {
-        console.error('Error saving edit:', error);
-        if (error instanceof Error) {
-          reportError(error, { component: 'Todo', operation: 'handleEditSave', todoId: id, ownerId: userId });
-        } else {
-          reportError(new Error('Unknown error saving edit'), { component: 'Todo', operation: 'handleEditSave', todoId: id, ownerId: userId });
-        }
+      await updateDoc(todoRef, {
+        content: newContentJSON,
+        text: newContentText,
+        mentionedUsers: newMentionedUserIds,
+      });
+      setIsEditing(false);
+    } catch (error) {
+      console.error('Error saving todo edit:', error);
+      if (error instanceof Error) {
+        reportError(error, { component: 'Todo', operation: 'handleSaveEdit', todoId: id });
+      } else {
+        reportError(new Error('Unknown error saving todo edit'), { component: 'Todo', operation: 'handleSaveEdit', todoId: id });
       }
     }
-    setIsEditing(!isEditing);
+  };
+
+  const handleCancelEdit = () => {
+    setIsEditing(false);
   };
 
   const handleDelete = async () => {
@@ -124,65 +233,92 @@ export default function Todo({ id, text, completed, userId, sharedWith = [], isO
     }
   };
 
+  // Cleanup display editor
+  useEffect(() => {
+    return () => {
+      displayEditor?.destroy();
+      editEditor?.destroy();
+    };
+  }, [displayEditor, editEditor]);
+
   return (
     <div className="flex flex-col p-4 bg-white dark:bg-gray-800 rounded-lg shadow mb-2 border border-gray-200 dark:border-gray-700">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 flex-1">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3 flex-1 min-w-0">
           <input
             type="checkbox"
             checked={completed}
             onChange={toggleComplete}
-            disabled={!canEdit}
-            className="form-checkbox h-4 w-4 text-blue-600 transition duration-150 ease-in-out bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:checked:bg-blue-500 dark:focus:ring-offset-gray-800"
+            disabled={!canToggleComplete}
+            className="form-checkbox flex-shrink-0 h-4 w-4 text-blue-600 transition duration-150 ease-in-out bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:checked:bg-blue-500 dark:focus:ring-offset-gray-800 mt-1"
           />
-          {isEditing ? (
-            <input
-              type="text"
-              value={editedText}
-              onChange={(e) => setEditedText(e.target.value)}
-              className="flex-1 p-1 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700"
-              autoFocus
-              onBlur={handleEdit}
-              onKeyDown={(e) => e.key === 'Enter' && handleEdit()}
-            />
-          ) : (
-            <span
-              className={`flex-1 text-gray-900 dark:text-gray-100 ${completed ? 'line-through text-gray-500 dark:text-gray-400' : ''}`}
-              onDoubleClick={() => { if (canEdit) setIsEditing(true); }}
-            >
-              {text}
-            </span>
-          )}
+          <div className={`flex-1 ${completed && !isEditing ? 'line-through text-gray-500 dark:text-gray-400 opacity-70' : ''}`}>
+             {isEditing ? (
+                <>
+                  <TiptapToolbar editor={editEditor} /> 
+                  <div className="border border-t-0 border-gray-300 dark:border-gray-600 rounded-b-lg p-2 bg-white dark:bg-gray-700">
+                    <EditorContent 
+                      editor={editEditor} 
+                    />
+                  </div>
+                  {isInCodeBlock && (
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      Use Cmd/Ctrl+Enter to exit code block.
+                    </p>
+                  )}
+                </>
+             ) : (
+                <EditorContent editor={displayEditor} />
+             )}
+          </div>
         </div>
-        <div className="flex gap-2">
-          {canEdit && (
-            <button
-              onClick={handleEdit}
-              className="px-2 py-1 text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
-            >
-              {isEditing ? 'Save' : 'Edit'}
-            </button>
-          )}
-          {isOwner && (
+        <div className="flex flex-col gap-1 self-start flex-shrink-0">
+          {isEditing ? (
             <>
               <button
-                onClick={() => setShowShare(!showShare)}
+                onClick={handleSaveEdit}
                 className="px-2 py-1 text-sm text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300"
               >
-                {showShare ? 'Close Share' : 'Share'}
+                Save
               </button>
               <button
-                onClick={handleDelete}
-                className="px-2 py-1 text-sm text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+                onClick={handleCancelEdit}
+                className="px-2 py-1 text-sm text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-300"
               >
-                Delete
+                Cancel
               </button>
+            </>
+          ) : (
+            <>
+              {canEdit && (
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className="px-2 py-1 text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                >
+                  Edit
+                </button>
+              )}
+              {isOwner && (
+                <button
+                  onClick={() => setShowShare(!showShare)}
+                  className="px-2 py-1 text-sm text-orange-600 hover:text-orange-800 dark:text-orange-400 dark:hover:text-orange-300"
+                >
+                  {showShare ? 'Close' : 'Share'}
+                </button>
+              )}
+              {isOwner && (
+                <button
+                  onClick={handleDelete}
+                  className="px-2 py-1 text-sm text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+                >
+                  Delete
+                </button>
+              )}
             </>
           )}
         </div>
       </div>
 
-      {/* User avatars */}
       {users.length > 0 && (
         <div className="mt-2 flex items-center gap-1">
           <span className="text-sm text-gray-500 dark:text-gray-400 mr-2">Access:</span>
