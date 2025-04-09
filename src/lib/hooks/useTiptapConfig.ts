@@ -1,58 +1,51 @@
 import StarterKit from '@tiptap/starter-kit';
+import Underline from '@tiptap/extension-underline';
+import Mention, { MentionOptions } from '@tiptap/extension-mention';
+import Hashtag from '@/lib/tiptap/hashtagExtension';
+import { EditorOptions } from '@tiptap/react';
+// Re-import previously commented extensions
 import ListItem from '@tiptap/extension-list-item';
 import BulletList from '@tiptap/extension-bullet-list';
 import OrderedList from '@tiptap/extension-ordered-list';
 import CodeBlock from '@tiptap/extension-code-block';
-import Mention, { MentionOptions } from '@tiptap/extension-mention';
-import Underline from '@tiptap/extension-underline';
 import Link from '@tiptap/extension-link';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import Highlight from '@tiptap/extension-highlight';
 import Placeholder from '@tiptap/extension-placeholder';
-import { EditorOptions } from '@tiptap/react';
-import { Editor, Extension } from '@tiptap/core';
+import { Editor } from '@tiptap/core'; // Keep Editor import for CustomCodeBlock
 
-// Import the suggestion utility
+// Import the suggestion utility again
 import { suggestionConfigUtility } from '@/lib/tiptap/mentionSuggestion';
 
-// Extend CodeBlock to add keyboard shortcuts and attributes
+// Re-enable CustomCodeBlock definition
 const CustomCodeBlock = CodeBlock.extend({
   addOptions() {
     return {
-      ...this.parent?.(), // Keep existing options
-      HTMLAttributes: {
-        class: 'font-sans', // Apply sans-serif font directly
-      },
+      ...this.parent?.(),
+      HTMLAttributes: { class: 'font-sans' },
     };
   },
   addKeyboardShortcuts() {
     return {
-      // Exit node on Mod+Enter
       'Mod-Enter': ({ editor }: { editor: Editor }) => {
-        if (!editor.isActive(this.name)) return false;
-        const { state } = editor;
-        const { selection } = state;
-        const { $head, $anchor } = selection;
-        // Ensure cursor is at the end of the code block
-        if (!$head.parent.eq($anchor.parent) || $head.parentOffset !== $head.parent.content.size) {
-          return false;
+        const { $head, $anchor } = editor.state.selection;
+        if ($head.parent.type.name === 'codeBlock' && 
+            $head.parentOffset === $head.parent.content.size &&
+            $head.pos === $anchor.pos) { 
+          return editor.chain().focus().exitCode().run();
         }
-        const end = $head.after();
-        return editor
-          .chain()
-          .insertContentAt(end, { type: 'paragraph' })
-          .focus(end + 1)
-          .run();
+        return false;
       },
-      // Prevent default Tab behavior (keeps focus in editor)
-      // This might be optional depending on desired behavior
       'Tab': ({ editor }: { editor: Editor }) => {
-         if (!editor.isActive(this.name)) return false;
-         return editor.commands.insertContent('\t');
+        if (editor.isActive('codeBlock')) {
+            return editor.commands.insertContent('  ');
+        }
+        return false;
       },
-      // Prevent default Shift+Tab behavior
-      'Shift-Tab': () => true, // Just prevent browser behavior
+      'Shift-Tab': () => {
+        return true; 
+      },
     };
   },
 });
@@ -72,55 +65,53 @@ export function useTiptapConfig({
   extensions: EditorOptions['extensions'];
   editorProps: EditorOptions['editorProps'];
 } {
-  // Base options for Mention extension
+  // Re-enable mentionOptions setup
   const mentionOptions: Partial<MentionOptions> = {
-    HTMLAttributes: { class: 'mention' },
+     HTMLAttributes: { class: 'mention' },
   };
-  
-  // Conditionally add the suggestion configuration
   if (enableMentionSuggestion) {
     mentionOptions.suggestion = suggestionConfigUtility;
   }
 
   const extensions: EditorOptions['extensions'] = [
     StarterKit.configure({
+      // Re-enable blockquote
+      code: false, // Keep inline code disabled?
+      codeBlock: false, // Use CustomCodeBlock instead
+      dropcursor: false,
+      gapcursor: false,
+      hardBreak: false,
+      // heading: undefined, // Default is enabled
+      // history: undefined, // Default is enabled
       horizontalRule: false,
-      // Explicitly disable StarterKit lists and code block
-      bulletList: false,
-      orderedList: false,
+      // Disable lists in StarterKit as they are added separately
+      orderedList: false, 
+      bulletList: false, 
       listItem: false,
-      codeBlock: false,
     }),
-    // Add standard lists MANUALLY before TaskList
+    // Re-add all extensions in intended order
     OrderedList,
     BulletList,
     ListItem,
-    // Use the extended CustomCodeBlock
     CustomCodeBlock,
-    // Then add TaskList
     TaskList,
-    TaskItem.configure({
-      nested: true,
-    }),
-    // Other extensions
+    TaskItem.configure({ nested: true }),
     Underline,
     Link.configure({
-      // Always autolink and link on paste
       autolink: true,
       linkOnPaste: true,
-      // Open on click only for non-editable editors
       openOnClick: !editable,
     }),
     Highlight,
-    Mention.configure(mentionOptions), // Pass the constructed options
-    // Conditionally add Placeholder
+    Mention.configure(mentionOptions),
+    Hashtag,
+    // Re-enable Placeholder
     ...(placeholder ? [Placeholder.configure({ placeholder })] : []),
   ];
 
   const editorProps: EditorOptions['editorProps'] = {
     attributes: {
-      // REMOVE prose classes again - Use manual CSS overrides instead
-      class: `focus:outline-none`, 
+      class: `focus:outline-none`,
     },
   };
 

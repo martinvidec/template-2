@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { collection, addDoc, query, onSnapshot, orderBy, where, doc, getDoc, getDocs, collectionGroup, limit, startAt, endAt } from 'firebase/firestore';
 import { db } from '@/lib/firebase/firebase';
 import { useAuth } from '@/lib/hooks/useAuth';
@@ -21,6 +21,7 @@ import ListItem from '@tiptap/extension-list-item';
 import BulletList from '@tiptap/extension-bullet-list';
 import OrderedList from '@tiptap/extension-ordered-list';
 import CodeBlock from '@tiptap/extension-code-block'; // Import CodeBlock
+import { extractHashtags } from '@/lib/utils/textUtils'; // Import helper
 
 interface TodoItem {
   id: string;
@@ -31,6 +32,8 @@ interface TodoItem {
   createdAt: Date;
   sharedWith?: string[];
   ownerId: string;
+  mentionedUsers?: string[]; // Existing
+  tags?: string[]; // Add tags field
 }
 
 // Helper function to extract mention UIDs from Tiptap JSON
@@ -51,6 +54,7 @@ const extractMentionIds = (node: any): string[] => {
 export default function TodoList() {
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [sharedTodos, setSharedTodos] = useState<TodoItem[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
   const { user, loading: authLoading } = useAuth();
   const { reportError } = useError();
   const { resolvedTheme } = useTheme();
@@ -117,6 +121,8 @@ export default function TodoList() {
             // Convert Firestore Timestamp to Date
             createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(), 
             sharedWith: data.sharedWith || [],
+            mentionedUsers: data.mentionedUsers || [],
+            tags: data.tags || [],
           };
       }).filter((todo: any): todo is TodoItem => todo !== null);
 
@@ -168,9 +174,8 @@ export default function TodoList() {
        return;
     }
 
-    // Extract mentioned user IDs
     const mentionedUserIds = extractMentionIds(contentJSON);
-    console.log("Mentioned User IDs found:", mentionedUserIds);
+    const extractedTags = extractHashtags(editor.getText()); // Extract tags
 
     try {
       await addDoc(collection(db, `users/${user.uid}/todos`), {
@@ -178,8 +183,9 @@ export default function TodoList() {
         text: editor.getText(),
         completed: false,
         createdAt: new Date(),
-        sharedWith: [], // sharedWith is for explicit sharing, not mentions
-        mentionedUsers: mentionedUserIds, // Save the extracted UIDs
+        sharedWith: [],
+        mentionedUsers: mentionedUserIds,
+        tags: extractedTags, // Save tags
       });
       editor.commands.clearContent(true);
     } catch (error) {
@@ -198,6 +204,57 @@ export default function TodoList() {
       editor?.destroy();
     };
   }, [editor]);
+
+  // Filter todos based on search query (multiple tags)
+  const filteredTodos = useMemo(() => {
+    const searchTerms = searchQuery
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(term => term.length > 0);
+
+    console.log('[Debug] Search Terms (My Todos):', searchTerms); // Log search terms
+
+    if (searchTerms.length === 0) {
+      return todos;
+    }
+
+    return todos.filter(todo => {
+      const todoTagsLower = todo.tags?.map(tag => tag.toLowerCase()) || [];
+      const doesMatch = searchTerms.every(term =>
+        todoTagsLower.some(tag => tag.includes(term))
+      );
+
+      // Log details for each todo being filtered
+      console.log(`[Debug] My Todo ${todo.id}: Tags:`, todo.tags, ` | Lower Tags:`, todoTagsLower, ` | Matches All Terms (${searchTerms.join(', ')}):`, doesMatch);
+
+      return doesMatch;
+    });
+  }, [todos, searchQuery]);
+
+  const filteredSharedTodos = useMemo(() => {
+    const searchTerms = searchQuery
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(term => term.length > 0);
+
+    console.log('[Debug] Search Terms (Shared Todos):', searchTerms); // Log search terms
+
+    if (searchTerms.length === 0) {
+      return sharedTodos;
+    }
+
+    return sharedTodos.filter(todo => {
+      const todoTagsLower = todo.tags?.map(tag => tag.toLowerCase()) || [];
+      const doesMatch = searchTerms.every(term =>
+        todoTagsLower.some(tag => tag.includes(term))
+      );
+
+      // Log details for each shared todo being filtered
+      console.log(`[Debug] Shared Todo ${todo.id} (Owner: ${todo.ownerId}): Tags:`, todo.tags, ` | Lower Tags:`, todoTagsLower, ` | Matches All Terms (${searchTerms.join(', ')}):`, doesMatch);
+
+      return doesMatch;
+    });
+  }, [sharedTodos, searchQuery]);
 
   const isLoading = authLoading || loadingOwn || loadingShared;
 
@@ -219,7 +276,7 @@ export default function TodoList() {
 
   return (
     <div className="max-w-2xl mx-auto p-4">
-      <form onSubmit={addTodo} className="mb-4">
+      <form onSubmit={addTodo} className="mb-6">
         <div className="border border-gray-300 dark:border-gray-600 rounded-lg">
           <TiptapToolbar editor={editor} />
           <div className="flex-1 p-2 bg-white dark:bg-gray-700">
@@ -250,41 +307,55 @@ export default function TodoList() {
         </div>
       </form>
 
+      {/* Search Input */}
+      <div className="mb-6">
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search by tags (e.g., work important)..."
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:bg-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400"
+        />
+      </div>
+
       <div className="space-y-6">
         <div>
           <h2 className="text-xl font-semibold mb-3 text-gray-900 dark:text-gray-100">My Todos</h2>
           <div className="space-y-2">
-            {todos.length === 0 && <p className="text-gray-500 dark:text-gray-400">No todos yet.</p>}
-            {todos.map((todo) => (
+            {filteredTodos.length === 0 && <p className="text-gray-500 dark:text-gray-400">{searchQuery ? 'No matching todos found.' : 'No todos yet.'}</p>}
+            {filteredTodos.map((todo) => (
               <Todo
                 key={`${todo.ownerId}-${todo.id}`}
                 id={todo.id}
                 content={todo.content}
-                text={todo.text || ''} // Provide fallback for optional text
+                text={todo.text || ''}
                 completed={todo.completed}
                 userId={todo.ownerId} 
                 sharedWith={todo.sharedWith}
                 isOwner={true}
+                tags={todo.tags}
               />
             ))}
           </div>
         </div>
 
-        {sharedTodos.length > 0 && (
+        {(sharedTodos.length > 0 || (searchQuery && filteredSharedTodos.length > 0)) && (
           <div>
             <h2 className="text-xl font-semibold mb-3 text-gray-900 dark:text-gray-100">Shared with Me</h2>
             <div className="space-y-2">
-              {sharedTodos.map((todo) => (
+              {filteredSharedTodos.length === 0 && searchQuery && <p className="text-gray-500 dark:text-gray-400">No matching shared todos found.</p>}
+              {filteredSharedTodos.map((todo) => (
                 <Todo
                   key={`${todo.ownerId}-${todo.id}`}
                   id={todo.id}
                   content={todo.content}
-                  text={todo.text || ''} // Provide fallback for optional text
+                  text={todo.text || ''}
                   completed={todo.completed}
                   userId={todo.ownerId}
                   sharedWith={todo.sharedWith}
                   isOwner={false}
                   originalUserId={todo.ownerId}
+                  tags={todo.tags}
                 />
               ))}
             </div>

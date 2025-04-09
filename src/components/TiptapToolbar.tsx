@@ -56,16 +56,11 @@ const TiptapToolbar: React.FC<TiptapToolbarProps> = ({ editor }) => {
     if (!editor) return;
     const previousUrl = editor.getAttributes('link').href;
     const url = window.prompt('URL', previousUrl);
-
-    if (url === null) {
-      return;
-    }
-
+    if (url === null) return;
     if (url === '') {
       editor.chain().focus().extendMarkRange('link').unsetLink().run();
       return;
     }
-
     editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
   }, [editor]);
 
@@ -118,6 +113,15 @@ const TiptapToolbar: React.FC<TiptapToolbarProps> = ({ editor }) => {
         title="Strikethrough"
       >
         <FaStrikethrough />
+      </button>
+      <button
+        type="button"
+        onClick={() => editor.chain().focus().toggleHighlight().run()}
+        disabled={!editor.can().toggleHighlight()}
+        className={getButtonClass('highlight') + ' p-1'}
+        title="Highlight"
+      >
+        <FaHighlighter />
       </button>
       <button
         type="button"
@@ -195,19 +199,10 @@ const TiptapToolbar: React.FC<TiptapToolbarProps> = ({ editor }) => {
         type="button"
         onClick={() => editor.chain().focus().unsetLink().run()}
         disabled={!editor.isActive('link')}
-        className={getButtonClass('link', { href: null }) + ' p-1'}
+        className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
         title="Unset Link"
       >
         <FaUnlink />
-      </button>
-      <button
-        type="button"
-        onClick={() => editor.chain().focus().toggleHighlight().run()}
-        disabled={!editor.can().toggleHighlight()}
-        className={getButtonClass('highlight') + ' p-1'}
-        title="Highlight"
-      >
-        <FaHighlighter />
       </button>
       <button
         ref={emojiButtonRef}

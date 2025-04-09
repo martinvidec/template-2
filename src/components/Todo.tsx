@@ -14,20 +14,22 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import TiptapToolbar from './TiptapToolbar';
 // Import the configuration hook
 import { useTiptapConfig } from '@/lib/hooks/useTiptapConfig';
+import { extractHashtags } from '@/lib/utils/textUtils';
+import { extractMentionIds } from '@/lib/utils/textUtils';
 
 // --- Helper function to extract mention UIDs --- 
-const extractMentionIds = (node: any): string[] => {
-  let ids: string[] = [];
-  if (node.type === 'mention' && node.attrs?.id) {
-    ids.push(node.attrs.id);
-  }
-  if (node.content) {
-    node.content.forEach((childNode: any) => {
-      ids = ids.concat(extractMentionIds(childNode));
-    });
-  }
-  return [...new Set(ids)]; 
-};
+// const extractMentionIds = (node: any): string[] => {
+//   let ids: string[] = [];
+//   if (node.type === 'mention' && node.attrs?.id) {
+//     ids.push(node.attrs.id);
+//   }
+//   if (node.content) {
+//     node.content.forEach((childNode: any) => {
+//       ids = ids.concat(extractMentionIds(childNode));
+//     });
+//   }
+//   return [...new Set(ids)]; 
+// };
 // --- End Helper --- 
 
 interface UserInfo {
@@ -46,9 +48,11 @@ interface TodoProps {
   sharedWith?: string[];
   isOwner: boolean;
   originalUserId?: string;
+  mentionedUsers?: string[];
+  tags?: string[];
 }
 
-export default function Todo({ id, content, text, completed, userId, sharedWith = [], isOwner: isOwnerProp, originalUserId }: TodoProps) {
+export default function Todo({ id, content, text, completed, userId, sharedWith = [], isOwner: isOwnerProp, originalUserId, tags }: TodoProps) {
   const [isEditing, setIsEditing] = useState(false);
   const prevIsEditingRef = useRef(isEditing);
   const [showShare, setShowShare] = useState(false);
@@ -189,6 +193,7 @@ export default function Todo({ id, content, text, completed, userId, sharedWith 
     const newContentJSON = editEditor.getJSON();
     const newContentText = editEditor.getText();
     const newMentionedUserIds = extractMentionIds(newContentJSON);
+    const newExtractedTags = extractHashtags(newContentText);
 
     if (newContentText.trim().length === 0) {
         reportError(new Error("Cannot save empty todo"), { component: 'Todo', operation: 'handleSaveEdit' });
@@ -201,6 +206,7 @@ export default function Todo({ id, content, text, completed, userId, sharedWith 
         content: newContentJSON,
         text: newContentText,
         mentionedUsers: newMentionedUserIds,
+        tags: newExtractedTags,
       });
       setIsEditing(false);
     } catch (error) {

@@ -170,3 +170,17 @@ body {
 :is(.dark .ProseMirror a) {
   color: #60a5fa; /* Tailwind blue-400 */
 }
+
+/* Styling for Hashtags */
+.ProseMirror .hashtag {
+  color: #15803d; /* Tailwind green-700 */
+  /* font-weight: 600; */ /* Keep semi-bold if desired? */
+}
+
+:is(.dark .ProseMirror .hashtag) {
+  color: #4ade80; /* Tailwind green-400 */
+  /* font-weight: 600; */
+}
+
+/* Task List Styles */
+/* ... task list styles ... */
