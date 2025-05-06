@@ -62,11 +62,12 @@ export default function TodoList() {
   const [loadingShared, setLoadingShared] = useState(true);
   const [isInCodeBlock, setIsInCodeBlock] = useState(false); // State for code block hint
 
-  // Get editor config from the hook
+  // Get editor config from the hook, now passing currentUserId
   const { extensions, editorProps } = useTiptapConfig({
     editable: true,
-    placeholder: 'Add a new todo... Type @ to mention users.',
+    placeholder: 'Add a new todo... Type @ to mention users or # for tags.', // Updated placeholder
     enableMentionSuggestion: true,
+    currentUserId: user?.uid, // Pass the current user's ID
   });
 
   // --- Tiptap Editor Initialization using the hook config ---

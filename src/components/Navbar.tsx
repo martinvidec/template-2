@@ -6,6 +6,7 @@ import Image from 'next/image';
 import { useAuth } from '@/lib/hooks/useAuth';
 import UserDropdown from './UserDropdown';
 import Breadcrumb from './Breadcrumb';
+import { FaCog, FaUsers, FaAddressBook } from 'react-icons/fa';
 
 export default function Navbar() {
   const { user, loading } = useAuth();
@@ -29,6 +30,9 @@ export default function Navbar() {
                 <Link href="/" className="text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 dark:hover:text-white px-3 py-2 rounded-md text-sm font-medium">Todos</Link>
                 <Link href="/mentions" className="text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 dark:hover:text-white px-3 py-2 rounded-md text-sm font-medium">Mentions</Link>
                 <Link href="/settings" className="text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 dark:hover:text-white px-3 py-2 rounded-md text-sm font-medium">Settings</Link>
+                <Link href="/contacts" className="text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 dark:hover:text-white px-3 py-2 rounded-md text-sm font-medium">
+                  Kontakte
+                </Link>
               </div>
             </div>
           </div>

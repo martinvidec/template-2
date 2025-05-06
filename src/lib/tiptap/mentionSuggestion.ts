@@ -11,29 +11,28 @@ import SuggestionList, { SuggestionListRef, SuggestionItem, SuggestionListProps 
 
 // Define the Suggestion utility configuration
 export const suggestionConfigUtility: Omit<MentionOptions['suggestion'], 'char' | 'allow'> = {
-  items: async ({ query: searchQuery }: { query: string }): Promise<SuggestionItem[]> => {
-    // console.log("Mention query:", searchQuery); // Keep or remove logging
-    try {
-      const usersRef = collection(db, 'users');
-      // Basic query - could be enhanced with search based on searchQuery
-      const q = query(usersRef, limit(5)); 
+  // items: async ({ query: searchQuery }: { query: string }): Promise<SuggestionItem[]> => {
+  //   // console.log("Mention query:", searchQuery); 
+  //   try {
+  //     const usersRef = collection(db, 'users');
+  //     const q = query(usersRef, limit(5)); 
       
-      const snapshot = await getDocs(q);
-      const users = snapshot.docs.map(doc => {
-        const data = doc.data() as { displayName?: string, email?: string, photoURL?: string }; 
-        return {
-          id: doc.id,
-          label: data.displayName || data.email || doc.id,
-          photoURL: data.photoURL,
-        };
-      });
-      // console.log("Mention suggestions:", users); // Keep or remove logging
-      return users;
-    } catch (error) {
-      console.error("Error fetching mention suggestions:", error);
-      return [];
-    }
-  },
+  //     const snapshot = await getDocs(q);
+  //     const users = snapshot.docs.map(doc => {
+  //       const data = doc.data() as { displayName?: string, email?: string, photoURL?: string }; 
+  //       return {
+  //         id: doc.id,
+  //         label: data.displayName || data.email || doc.id,
+  //         photoURL: data.photoURL,
+  //       };
+  //     });
+  //     // console.log("Mention suggestions:", users);
+  //     return users;
+  //   } catch (error) {
+  //     console.error("Error fetching mention suggestions:", error);
+  //     return [];
+  //   }
+  // },
 
   render: () => {
     let component: ReactRenderer<SuggestionListRef, SuggestionListProps>;

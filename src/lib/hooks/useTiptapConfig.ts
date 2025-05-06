@@ -16,7 +16,9 @@ import Placeholder from '@tiptap/extension-placeholder';
 import { Editor } from '@tiptap/core'; // Keep Editor import for CustomCodeBlock
 
 // Import the suggestion utility again
-import { suggestionConfigUtility } from '@/lib/tiptap/mentionSuggestion';
+import { suggestionConfigUtility as baseSuggestionConfig } from '@/lib/tiptap/mentionSuggestion'; // Renamed for clarity
+import { getContacts, Contact } from '@/lib/firebase/firebaseUtils'; // Import getContacts and Contact
+import { SuggestionItem } from '@/components/SuggestionList'; // Assuming SuggestionItem is exported here
 
 // Re-enable CustomCodeBlock definition
 const CustomCodeBlock = CodeBlock.extend({
@@ -54,6 +56,7 @@ interface UseTiptapConfigOptions {
   editable: boolean;
   placeholder?: string;
   enableMentionSuggestion: boolean;
+  currentUserId?: string; // Added currentUserId
 }
 
 // This hook RETURNS configuration objects, it does NOT call useEditor itself.
@@ -61,16 +64,58 @@ export function useTiptapConfig({
   editable,
   placeholder,
   enableMentionSuggestion,
+  currentUserId, // Destructure currentUserId
 }: UseTiptapConfigOptions): {
   extensions: EditorOptions['extensions'];
   editorProps: EditorOptions['editorProps'];
 } {
-  // Re-enable mentionOptions setup
   const mentionOptions: Partial<MentionOptions> = {
      HTMLAttributes: { class: 'mention' },
   };
-  if (enableMentionSuggestion) {
-    mentionOptions.suggestion = suggestionConfigUtility;
+
+  if (enableMentionSuggestion && currentUserId) { // Check for currentUserId
+    mentionOptions.suggestion = {
+      ...baseSuggestionConfig, // Spread the rest of the config (render, etc.)
+      items: async ({ query: searchQuery }: { query: string }): Promise<SuggestionItem[]> => {
+        if (!currentUserId) return []; // Should be caught by outer if, but good practice
+
+        try {
+          const contacts: Contact[] = await getContacts(currentUserId);
+          
+          const filteredContacts = contacts.filter(contact => {
+            const searchLower = searchQuery.toLowerCase();
+            const nameMatch = contact.displayName?.toLowerCase().includes(searchLower);
+            const emailMatch = contact.email?.toLowerCase().includes(searchLower);
+            return nameMatch || emailMatch;
+          });
+
+          return filteredContacts.map(contact => ({
+            id: contact.uid,
+            label: contact.displayName || contact.email || contact.uid, // Ensure label is always a string
+            photoURL: contact.photoURL,
+            // Ensure all fields expected by SuggestionItem are present or undefined
+            // email: contact.email, // if SuggestionItem needs it
+            // isRequest: false, // if SuggestionItem needs it
+          }));
+        } catch (error) {
+          console.error("Error fetching contact suggestions for Tiptap:", error);
+          return [];
+        }
+      },
+    };
+  } else if (enableMentionSuggestion) {
+    // Fallback to original behavior if no currentUserId (e.g., for public pages or if user not logged in)
+    // You might want to disable mentions entirely or use the original generic user search
+    // For now, let's use the base config which searches all users (if it still exists and is desired)
+    // Or, more safely, provide an empty items array or a specific "login to see contacts" message
+     mentionOptions.suggestion = {
+        ...baseSuggestionConfig, // Use the original config
+        items: async () => { // Or provide a static "please log in" item
+            // console.warn("Mention suggestion enabled but no currentUserId provided. Using base/generic suggestions.");
+            // return (await baseSuggestionConfig.items({query: ''})); // if baseSuggestionConfig.items is still there
+            return [{ id: 'login-prompt', label: 'Log in to see contacts', photoURL: undefined, isRequest: true, email: '' }]; // Example prompt
+        }
+     };
   }
 
   const extensions: EditorOptions['extensions'] = [
