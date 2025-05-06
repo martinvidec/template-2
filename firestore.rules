@@ -11,49 +11,59 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // Rules for specific user documents and their todos subcollection
+    // Rules for specific user documents and their subcollections
     match /users/{userId} {
-      // User document rules
-      // Allow any authenticated user to read user documents (assuming public info)
       allow read: if isAuthenticated();
-      // Allow only the owner to write their own document
-      allow write: if isOwner(userId);
+      allow write: if isOwner(userId); // Owner can write their own user doc
 
-      // Todos subcollection rules (for direct access)
       match /todos/{todoId} {
-        // Allow read/update if owner OR if uid is directly in the resource's sharedWith array
         allow read, update: if isAuthenticated() && (
-                               isOwner(userId) || 
+                               isOwner(userId) ||
                                (resource.data.sharedWith != null && request.auth.uid in resource.data.sharedWith)
                              );
-        // Create/delete only allowed for the owner
         allow create, delete: if isOwner(userId);
+      }
+
+      // Contacts subcollection: users/{ownerId}/contacts/{contactEntryId}
+      // ownerId = Der Benutzer, dem die Kontaktliste gehört
+      // contactEntryId = Die UID des Kontakts in der Liste
+      match /contacts/{contactEntryId} {
+        // Der ownerId kann seine gesamte Kontaktliste lesen, Einträge hinzufügen, ändern, löschen
+        allow read, write, delete: if isOwner(userId);
+
+        // ERGÄNZUNG: Der Benutzer, dessen UID dem contactEntryId entspricht,
+        // darf seinen eigenen Eintrag in der Liste eines anderen Benutzers ERSTELLEN.
+        // Dies wird benötigt, wenn User B die Anfrage von User A annimmt
+        // und User B sich selbst zur Kontaktliste von User A hinzufügt.
+        // Der 'userId' im Pfad ist hier der 'ownerId' der Kontaktliste (z.B. User A).
+        // Der 'contactEntryId' im Pfad ist die UID des Kontakts, der hinzugefügt wird (z.B. User B).
+        allow create: if isAuthenticated() && request.auth.uid == contactEntryId;
+      }
+
+      // Outgoing Contact Requests: users/{senderId}/outgoingContactRequests/{receiverId}
+      match /outgoingContactRequests/{receiverId} {
+        // Sender (owner) can read, create, and delete (e.g. cancel request)
+        allow read, write: if isOwner(userId); // userId refers to senderId here
+        // Receiver can delete (when rejecting or accepting the request)
+        allow delete: if isAuthenticated() && request.auth.uid == receiverId;
+      }
+
+      // Incoming Contact Requests: users/{receiverId}/incomingContactRequests/{senderId}
+      match /incomingContactRequests/{senderId} {
+        // Receiver (owner) can read and delete (accept/reject)
+        allow read, delete: if isOwner(userId); // userId refers to receiverId here
+        // Sender can create this request for {receiverId}
+        allow create: if isAuthenticated() && request.auth.uid == senderId;
       }
     }
 
-    // --- RULE FOR 'todos' COLLECTION GROUP QUERY (Shared With) ---
+    // Collection group queries
     match /{path=**}/todos/{todoId} {
        allow read: if isAuthenticated() && (
-                       request.auth.uid == path[1] || 
-                       (resource.data.sharedWith != null && request.auth.uid in resource.data.sharedWith)
+                       request.auth.uid == path[1] ||
+                       (resource.data.sharedWith != null && request.auth.uid in resource.data.sharedWith) ||
+                       (resource.data.mentionedUsers != null && request.auth.uid in resource.data.mentionedUsers)
                     );
-    }
-
-    // --- RULE FOR 'todos' COLLECTION GROUP QUERY (Mentions) ---
-    // This allows the collectionGroup query used in MentionsList.
-    match /{path=**}/todos/{todoId} {
-       // Allow reading documents from the collection group query IF:
-       // 1. User is authenticated AND
-       // 2. The user's UID is present in the document's mentionedUsers array.
-       allow read: if isAuthenticated() && 
-                      (resource.data.mentionedUsers != null && request.auth.uid in resource.data.mentionedUsers);
-        // Note: We could combine this rule with the one above, but separate can be clearer.
-        // Combined would be: 
-        // allow read: if isAuthenticated() && (
-        //                 request.auth.uid == path[1] || 
-        //                 (resource.data.sharedWith != null && request.auth.uid in resource.data.sharedWith) ||
-        //                 (resource.data.mentionedUsers != null && request.auth.uid in resource.data.mentionedUsers)
-        //              );
     }
   }
 } 
