@@ -40,20 +40,33 @@ service cloud.firestore {
         allow create: if isAuthenticated() && request.auth.uid == contactEntryId;
       }
 
-      // Outgoing Contact Requests: users/{senderId}/outgoingContactRequests/{receiverId}
-      match /outgoingContactRequests/{receiverId} {
-        // Sender (owner) can read, create, and delete (e.g. cancel request)
-        allow read, write: if isOwner(userId); // userId refers to senderId here
-        // Receiver can delete (when rejecting or accepting the request)
-        allow delete: if isAuthenticated() && request.auth.uid == receiverId;
+      // Outgoing Contact Requests: users/{senderId_in_path}/outgoingContactRequests/{receiverIdOrHashedEmail_in_path}
+      // userId in isOwner(userId) refers to senderId_in_path
+      match /outgoingContactRequests/{receiverIdOrHashedEmail_in_path} {
+        // Sender (owner) can read, create, write, and delete their outgoing requests.
+        allow read, write, delete: if isOwner(userId);
+        
+        // Receiver can delete a PENDING request (e.g., when rejecting or accepting it).
+        // This rule should NOT apply to 'invited' status as there's no actual receiver user yet to take action.
+        // It also shouldn't allow a receiver to delete an already accepted/rejected request from the sender's outgoing list.
+        allow delete: if isAuthenticated() && 
+                       request.auth.uid == receiverIdOrHashedEmail_in_path &&
+                       // Ensure the document exists and its status is 'pending' before allowing deletion by receiver.
+                       // Direct access to resource.data for status check is needed here.
+                       (exists(/databases/$(database)/documents/users/$(userId)/outgoingContactRequests/$(receiverIdOrHashedEmail_in_path)) &&
+                        get(/databases/$(database)/documents/users/$(userId)/outgoingContactRequests/$(receiverIdOrHashedEmail_in_path)).data.status == 'pending');
       }
 
-      // Incoming Contact Requests: users/{receiverId}/incomingContactRequests/{senderId}
-      match /incomingContactRequests/{senderId} {
-        // Receiver (owner) can read and delete (accept/reject)
-        allow read, delete: if isOwner(userId); // userId refers to receiverId here
-        // Sender can create this request for {receiverId}
-        allow create: if isAuthenticated() && request.auth.uid == senderId;
+      // Incoming Contact Requests: users/{receiverId_in_path}/incomingContactRequests/{senderId_in_path}
+      // userId in isOwner(userId) refers to receiverId_in_path
+      match /incomingContactRequests/{senderId_in_path} {
+        // Receiver (owner) can read their incoming requests.
+        allow read: if isOwner(userId);
+        // Receiver (owner) OR the original Sender (senderId_in_path) can delete the incoming request.
+        // (e.g. receiver rejects/accepts, sender cancels their request).
+        allow delete: if isOwner(userId) || (isAuthenticated() && request.auth.uid == senderId_in_path);
+        // Sender (senderId_in_path) can create an incoming request for the receiver (userId).
+        allow create: if isAuthenticated() && request.auth.uid == senderId_in_path;
       }
     }
 

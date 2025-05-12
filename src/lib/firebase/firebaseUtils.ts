@@ -61,6 +61,25 @@ export const uploadFile = async (file: File, path: string) => {
   return getDownloadURL(storageRef);
 };
 
+// Helper function to generate a SHA-256 hash string from an email
+const generateIdFromEmail = async (email: string): Promise<string> => {
+  const lowerCaseEmail = email.toLowerCase(); // Normalize to lowercase first
+  const encoder = new TextEncoder();
+  const data = encoder.encode(lowerCaseEmail);
+  try {
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    // Convert ArrayBuffer to hex string
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return hashHex;
+  } catch (error) {
+    console.error("Error generating SHA-256 hash:", error);
+    // Fallback or re-throw, depending on how critical this is. 
+    // For now, re-throwing as it's crucial for ID generation.
+    throw new Error('Could not generate a unique ID for the email.');
+  }
+};
+
 // --- User Profile Functions --- 
 
 export const saveUserProfile = async (userId: string, data: { email?: string | null; displayName?: string | null; photoURL?: string | null }) => {
@@ -80,153 +99,167 @@ export const getUserProfile = async (userId: string) => {
 
 // --- Contact Management Functions --- 
 
-export const sendContactRequest = async (targetEmail: string) => {
+export const sendContactRequest = async (targetEmailInput: string) => {
   const currentUser = auth.currentUser;
   if (!currentUser) throw new Error("User not authenticated.");
-  if (currentUser.email === targetEmail) throw new Error("You cannot send a contact request to yourself.");
+
+  const targetEmail = targetEmailInput.trim().toLowerCase();
+  if (currentUser.email?.toLowerCase() === targetEmail) throw new Error("You cannot send a contact request to yourself.");
 
   const usersRef = collection(db, 'users');
   const q = query(usersRef, where('email', '==', targetEmail), limit(1));
   const querySnapshot = await getDocs(q);
-  if (querySnapshot.empty) throw new Error(`User with email ${targetEmail} not found.`);
 
-  const targetUserDoc = querySnapshot.docs[0];
-  const targetUid = targetUserDoc.id;
-  const targetUserData = targetUserDoc.data();
   const currentUid = currentUser.uid;
 
-  // --- Corrected Document References (Simpler Structure) ---
-  // Path: users/{currentUid}/contacts/{targetUid}
-  const contactRef = doc(db, 'users', currentUid, 'contacts', targetUid);
-  
-  // Path: users/{currentUid}/outgoingContactRequests/{targetUid}
-  const outgoingRequestRef = doc(db, 'users', currentUid, 'outgoingContactRequests', targetUid);
-  
-  // Path: users/{currentUid}/incomingContactRequests/{targetUid} (Request FROM target TO current)
-  const incomingRequestRef = doc(db, 'users', currentUid, 'incomingContactRequests', targetUid);
-
-  // Path: users/{targetUid}/contacts/{currentUid}
-  const targetContactRef = doc(db, 'users', targetUid, 'contacts', currentUid);
-  
-  // Path: users/{targetUid}/incomingContactRequests/{currentUid} (Request FROM current TO target)
-  const targetIncomingRequestRef = doc(db, 'users', targetUid, 'incomingContactRequests', currentUid);
-
-  // --- Check existing states --- 
-  const contactSnap = await getDoc(contactRef);
-  if (contactSnap.exists()) throw new Error(`You are already contacts with ${targetEmail}.`);
-
-  const outgoingRequestSnap = await getDoc(outgoingRequestRef);
-  if (outgoingRequestSnap.exists()) throw new Error(`Contact request to ${targetEmail} already sent.`);
-
-  // Check if target has already sent a request to current user
-  const requestFromTargetToCurrentUserRef = doc(db, 'users', currentUid, 'incomingContactRequests', targetUid);
-  const requestFromTargetToCurrentUserSnap = await getDoc(requestFromTargetToCurrentUserRef);
-
-  if (requestFromTargetToCurrentUserSnap.exists()) {
-    const batch = writeBatch(db);
-    batch.set(contactRef, {
-      uid: targetUid,
-      email: targetUserData.email || targetEmail,
-      displayName: targetUserData.displayName || null,
-      photoURL: targetUserData.photoURL || null,
-      addedAt: serverTimestamp(),
-    });
-    batch.set(targetContactRef, {
-      uid: currentUid,
-      email: currentUser.email,
-      displayName: currentUser.displayName,
-      photoURL: currentUser.photoURL,
-      addedAt: serverTimestamp(),
-    });
+  if (querySnapshot.empty) {
+    // --- User does not exist: Initiate an Invite --- 
+    console.log(`User with email ${targetEmail} not found. Initiating an invite.`);
     
-    batch.delete(requestFromTargetToCurrentUserRef); // Delete incoming request for current user
-    // Delete the corresponding outgoing request from the target user
-    const correspondingOutgoingRequestFromTargetRef = doc(db, 'users', targetUid, 'outgoingContactRequests', currentUid);
-    batch.delete(correspondingOutgoingRequestFromTargetRef);
+    const hashedEmailId = await generateIdFromEmail(targetEmail);
+    const outgoingInviteRef = doc(db, 'users', currentUid, 'outgoingContactRequests', hashedEmailId);
 
+    const existingInviteSnap = await getDoc(outgoingInviteRef);
+    if (existingInviteSnap.exists()) {
+      // Check if it's a resent invite or truly pending
+      const existingData = existingInviteSnap.data();
+      if (existingData?.status === 'invited') {
+        throw new Error(`An invitation for ${targetEmail} has already been sent and is pending.`);
+      } else {
+        // If status is something else (e.g. old, resolved), allow re-inviting by overwriting
+        console.log(`Found previous non-pending invite for ${targetEmail}, proceeding to re-invite.`);
+      }
+    }
+
+    await setDoc(outgoingInviteRef, {
+      targetEmail: targetEmail, // Store the original (lowercase) email
+      status: 'invited',
+      requestedAt: serverTimestamp(),
+      // No targetUid or targetUser details as the user doesn't exist yet
+    });
+    return { status: 'invited', message: `User ${targetEmail} not found. An invitation has been initiated.` };
+
+  } else {
+    // --- User exists: Proceed with normal contact request --- 
+    const targetUserDoc = querySnapshot.docs[0];
+    const targetUid = targetUserDoc.id;
+    const targetUserData = targetUserDoc.data();
+
+    const contactRef = doc(db, 'users', currentUid, 'contacts', targetUid);
+    const outgoingRequestRef = doc(db, 'users', currentUid, 'outgoingContactRequests', targetUid);
+    const targetIncomingRequestRef = doc(db, 'users', targetUid, 'incomingContactRequests', currentUid);
+    const requestFromTargetToCurrentUserRef = doc(db, 'users', currentUid, 'incomingContactRequests', targetUid);
+    
+    const contactSnap = await getDoc(contactRef);
+    if (contactSnap.exists()) throw new Error(`You are already contacts with ${targetUserData.displayName || targetEmail}.`);
+
+    const outgoingRequestSnap = await getDoc(outgoingRequestRef);
+    if (outgoingRequestSnap.exists()) throw new Error(`Contact request to ${targetUserData.displayName || targetEmail} already sent.`);
+
+    const requestFromTargetToCurrentUserSnap = await getDoc(requestFromTargetToCurrentUserRef);
+    if (requestFromTargetToCurrentUserSnap.exists()) {
+      const batch = writeBatch(db);
+      batch.set(contactRef, {
+        uid: targetUid,
+        email: targetUserData.email || targetEmail,
+        displayName: targetUserData.displayName || null,
+        photoURL: targetUserData.photoURL || null,
+        addedAt: serverTimestamp(),
+      });
+      const targetContactRef = doc(db, 'users', targetUid, 'contacts', currentUid);
+      batch.set(targetContactRef, {
+        uid: currentUid,
+        email: currentUser.email,
+        displayName: currentUser.displayName,
+        photoURL: currentUser.photoURL,
+        addedAt: serverTimestamp(),
+      });
+      batch.delete(requestFromTargetToCurrentUserRef); 
+      const correspondingOutgoingRequestFromTargetRef = doc(db, 'users', targetUid, 'outgoingContactRequests', currentUid);
+      batch.delete(correspondingOutgoingRequestFromTargetRef);
+      await batch.commit();
+      return { status: 'contact_added', message: `Successfully added ${targetUserData.displayName || targetEmail} as a contact (accepted their prior request).` };
+    }
+
+    const batch = writeBatch(db);
+    const requestData = { requestedAt: serverTimestamp(), status: 'pending' };
+    const incomingData = {
+      ...requestData,
+      requesterEmail: currentUser.email,
+      requesterDisplayName: currentUser.displayName,
+      requesterPhotoURL: currentUser.photoURL,
+    };
+    batch.set(outgoingRequestRef, requestData);
+    batch.set(targetIncomingRequestRef, incomingData);
     await batch.commit();
-    console.log(`Successfully added ${targetEmail} as a contact (accepted incoming request).`);
-    return;
+    return { status: 'request_sent', message: `Contact request successfully sent to ${targetUserData.displayName || targetEmail}.` };
   }
-
-  // --- If none of the above, send a new request --- 
-  const batch = writeBatch(db);
-  const requestData = { requestedAt: serverTimestamp(), status: 'pending' };
-  const incomingData = {
-    ...requestData,
-    requesterEmail: currentUser.email,
-    requesterDisplayName: currentUser.displayName,
-    requesterPhotoURL: currentUser.photoURL,
-  };
-
-  batch.set(outgoingRequestRef, requestData); // users/{currentUid}/outgoingContactRequests/{targetUid}
-  batch.set(targetIncomingRequestRef, incomingData); // users/{targetUid}/incomingContactRequests/{currentUid}
-  
-  await batch.commit();
-  console.log(`Contact request successfully sent to ${targetEmail}.`);
 };
 
-// --- Interface for Outgoing Request Data --- 
+// --- Interface for Outgoing Request Data (Updated for Invites) --- 
 export interface OutgoingRequest {
-  id: string; // targetUserId
-  status: string;
+  id: string; // Can be targetUserId OR hashedEmailId for invites
+  status: 'pending' | 'invited' | 'accepted' | 'rejected'; // Added 'invited'
   requestedAt: Date;
-  targetUser?: { // Details des Benutzers, an den die Anfrage ging
+  targetUser?: { 
     displayName?: string | null;
     email?: string | null;
     photoURL?: string | null;
-  };
+  } | null; 
+  targetEmail?: string; // Email of the invited user, present if status is 'invited'
 }
 
-// --- Function to get outgoing contact requests --- 
+// --- Function to get outgoing contact requests (Updated for Invites) --- 
 export const getOutgoingContactRequests = async (userId: string): Promise<OutgoingRequest[]> => {
   if (!userId) return [];
-
   try {
     const requestsColRef = collection(db, 'users', userId, 'outgoingContactRequests');
-    // Optional: Order by requestedAt descending
     const q = query(requestsColRef, orderBy('requestedAt', 'desc')); 
     const snapshot = await getDocs(q);
-
-    if (snapshot.empty) {
-      return [];
-    }
+    if (snapshot.empty) return [];
 
     const requestsPromises = snapshot.docs.map(async (reqDoc) => {
       const reqData = reqDoc.data();
-      const targetUserId = reqDoc.id; // The ID of the document is the target user's UID
+      const docId = reqDoc.id; // This is either a UID or a hashedEmailId
 
-      // Fetch target user's profile
-      let targetUserProfile: { displayName?: string | null; email?: string | null; photoURL?: string | null } | null = null;
-      try {
-        const userProfile = await getUserProfile(targetUserId);
-        if (userProfile) {
-          targetUserProfile = {
-            displayName: userProfile.displayName,
-            email: userProfile.email,
-            photoURL: userProfile.photoURL,
-          };
+      let targetUserProfile: OutgoingRequest['targetUser'] = null;
+      let resolvedTargetEmail: string | undefined = reqData.targetEmail; // Get from doc if present for invites
+
+      if (reqData.status !== 'invited') {
+        // For non-invite statuses, docId should be a targetUserId
+        try {
+          const userProfile = await getUserProfile(docId); // docId is targetUserId here
+          if (userProfile) {
+            targetUserProfile = {
+              displayName: userProfile.displayName,
+              email: userProfile.email,
+              photoURL: userProfile.photoURL,
+            };
+            // If targetEmail wasn't in the doc (e.g. older pending requests before this change),
+            // try to populate it from the fetched profile.
+            if (!resolvedTargetEmail) resolvedTargetEmail = userProfile.email;
+          }
+        } catch (profileError) {
+          console.error(`Error fetching profile for target user ${docId}:`, profileError);
         }
-      } catch (profileError) {
-        console.error(`Error fetching profile for target user ${targetUserId}:`, profileError);
-        // Continue without profile info if it fails
+      } else if (!resolvedTargetEmail) {
+        // This case is problematic for an 'invited' status if targetEmail is missing.
+        // It implies data inconsistency if an invite was created without storing targetEmail.
+        console.warn(`Outgoing request with ID ${docId} has status 'invited' but no targetEmail field was found in the document. This invite may not be actionable.`);
       }
       
       return {
-        id: targetUserId,
-        status: reqData.status || 'pending',
-        // Ensure requestedAt is converted to Date if it's a Firestore Timestamp
+        id: docId, 
+        status: reqData.status || 'pending', 
         requestedAt: reqData.requestedAt?.toDate ? reqData.requestedAt.toDate() : new Date(), 
-        targetUser: targetUserProfile || undefined, // Use undefined if null to match interface
+        targetUser: targetUserProfile,
+        targetEmail: resolvedTargetEmail, // This will be undefined if not available
       } as OutgoingRequest;
     });
-
     return Promise.all(requestsPromises);
-
   } catch (error) {
     console.error("Error fetching outgoing contact requests:", error);
-    // Depending on how you want to handle errors, you might throw or return empty
-    throw error; // Or return [] and let the UI handle it
+    throw error;
   }
 };
 
@@ -382,6 +415,43 @@ export const getContacts = async (userId: string): Promise<Contact[]> => {
   } catch (error) {
     console.error("Error fetching contacts:", error);
     throw error;
+  }
+};
+
+// --- Function to cancel an outgoing contact request or invite --- 
+export const cancelOutgoingRequest = async (
+  currentUserId: string,
+  targetIdentifier: string, // This is targetUserId for normal requests, or hashedEmailId for invites
+  isInvite: boolean
+): Promise<{ message: string }> => {
+  if (!currentUserId || !targetIdentifier) {
+    throw new Error("Current user ID and target identifier are required.");
+  }
+
+  const batch = writeBatch(db);
+
+  // 1. Delete the outgoing request/invite from the current user's subcollection
+  const outgoingRequestRef = doc(db, 'users', currentUserId, 'outgoingContactRequests', targetIdentifier);
+  batch.delete(outgoingRequestRef);
+
+  // 2. If it was a normal request (not an invite), also delete the corresponding incoming request from the target user's subcollection
+  if (!isInvite) {
+    const targetUserId = targetIdentifier; // For non-invites, targetIdentifier is the UID of the target
+    const incomingRequestAtTargetRef = doc(db, 'users', targetUserId, 'incomingContactRequests', currentUserId);
+    batch.delete(incomingRequestAtTargetRef);
+    console.log(`Also deleting incoming request at users/${targetUserId}/incomingContactRequests/${currentUserId}`);
+  }
+
+  try {
+    await batch.commit();
+    if (isInvite) {
+      return { message: "Invitation successfully canceled." };
+    } else {
+      return { message: "Contact request successfully canceled." };
+    }
+  } catch (error) {
+    console.error("Error canceling outgoing request/invite:", error);
+    throw new Error("Failed to cancel the request/invite. Please try again.");
   }
 };
 
