@@ -10,11 +10,12 @@ import {
   IncomingRequest,
   acceptContactRequest,
   rejectContactRequest,
-  getContacts, Contact
+  getContacts, Contact,
+  cancelOutgoingRequest
 } from '@/lib/firebase/firebaseUtils';
 import { useError } from '@/lib/hooks/useError';
 import Image from 'next/image';
-import { FaCheckCircle, FaTimesCircle, FaPaperPlane, FaSpinner, FaUsers } from 'react-icons/fa';
+import { FaCheckCircle, FaTimesCircle, FaPaperPlane, FaSpinner, FaUsers, FaEnvelope } from 'react-icons/fa';
 
 export default function ContactsPage() {
   const { user } = useAuth();
@@ -77,13 +78,15 @@ export default function ContactsPage() {
     setMessage(null);
 
     try {
-      await sendContactRequest(targetEmail.trim());
-      setMessage({ type: 'success', text: `Contact request sent to ${targetEmail.trim()}.` });
-      setTargetEmail('');
-      fetchAllContactData();
+      const result = await sendContactRequest(targetEmail.trim());
+      setMessage({ type: 'success', text: result.message });
+      if (result.status === 'invited' || result.status === 'request_sent' || result.status === 'contact_added') {
+        setTargetEmail('');
+        fetchAllContactData();
+      }
     } catch (error: any) {
-      console.error("Error sending contact request:", error);
-      setMessage({ type: 'error', text: error.message || 'Failed to send contact request.' });
+      console.error("Error sending contact request or invite:", error);
+      setMessage({ type: 'error', text: error.message || 'Failed to process request.' });
     } finally {
       setIsLoadingSend(false);
     }
@@ -120,6 +123,25 @@ export default function ContactsPage() {
       setMessage({ type: 'error', text: error.message || 'Failed to reject request.'});
     } finally {
       setActionLoading(prev => ({ ...prev, [requesterId]: false }));
+    }
+  };
+
+  const handleCancelOutgoingRequest = async (requestId: string, isInvite: boolean) => {
+    if (!user?.uid) {
+      setMessage({ type: 'error', text: 'You must be logged in to cancel a request.' });
+      return;
+    }
+    setActionLoading(prev => ({ ...prev, [requestId]: true }));
+    setMessage(null);
+    try {
+      const result = await cancelOutgoingRequest(user.uid, requestId, isInvite);
+      setMessage({ type: 'success', text: result.message });
+      fetchAllContactData(); // Refresh lists
+    } catch (error: any) {
+      console.error("Error canceling outgoing request/invite:", error);
+      setMessage({ type: 'error', text: error.message || 'Failed to cancel request/invite.' });
+    } finally {
+      setActionLoading(prev => ({ ...prev, [requestId]: false }));
     }
   };
 
@@ -265,27 +287,51 @@ export default function ContactsPage() {
         ) : (
           <ul className="space-y-4">
             {outgoingRequests.map(req => (
-              <li key={req.id} className="p-4 border border-gray-200 dark:border-gray-700 rounded-md flex items-center justify-between">
-                <div className="flex items-center">
-                  {req.targetUser?.photoURL ? (
-                    <Image src={req.targetUser.photoURL} alt={req.targetUser.displayName || req.targetUser.email || 'Avatar'} width={40} height={40} className="rounded-full mr-3" />
+              <li key={req.id} className="p-4 border border-gray-200 dark:border-gray-700 rounded-md flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center min-w-0">
+                  {req.status === 'invited' ? (
+                    <div className="w-10 h-10 rounded-full bg-gray-200 dark:bg-gray-500 flex items-center justify-center mr-3 text-gray-500 dark:text-gray-300 flex-shrink-0">
+                      <FaEnvelope />
+                    </div>
+                  ) : req.targetUser?.photoURL ? (
+                    <Image src={req.targetUser.photoURL} alt={req.targetUser.displayName || req.targetUser.email || 'Avatar'} width={40} height={40} className="rounded-full mr-3 flex-shrink-0" />
                   ) : (
-                    <div className="w-10 h-10 rounded-full bg-gray-300 dark:bg-gray-600 flex items-center justify-center mr-3 text-gray-500 dark:text-gray-400">
-                      {(req.targetUser?.displayName || req.targetUser?.email || '?').charAt(0).toUpperCase()}
+                    <div className="w-10 h-10 rounded-full bg-gray-300 dark:bg-gray-600 flex items-center justify-center mr-3 text-gray-500 dark:text-gray-400 flex-shrink-0">
+                      {((req.targetUser?.displayName || req.targetUser?.email) || '?').charAt(0).toUpperCase()}
                     </div>
                   )}
-                  <div>
-                    <p className="font-medium text-gray-900 dark:text-gray-100">
-                      {req.targetUser?.displayName || req.targetUser?.email || req.id}
+                  <div className="min-w-0">
+                    <p className="font-medium text-gray-900 dark:text-gray-100 truncate">
+                      {req.status === 'invited' 
+                        ? (req.targetEmail || 'E-Mail Einladung') 
+                        : (req.targetUser?.displayName || req.targetUser?.email || req.id)}
                     </p>
                     <p className="text-sm text-gray-500 dark:text-gray-400">
-                      Status: <span className={`font-semibold ${req.status === 'pending' ? 'text-yellow-600 dark:text-yellow-400' : 'text-gray-600 dark:text-gray-300'}`}>{req.status}</span>
+                      Status: <span className={`font-semibold ${ 
+                        req.status === 'pending' ? 'text-yellow-600 dark:text-yellow-400' : 
+                        req.status === 'invited' ? 'text-blue-600 dark:text-blue-400' :
+                        req.status === 'accepted' ? 'text-green-600 dark:text-green-400' :
+                        req.status === 'rejected' ? 'text-red-600 dark:text-red-400' :
+                        'text-gray-600 dark:text-gray-300'}`}>
+                          {req.status === 'invited' ? 'Eingeladen' : req.status}
+                        </span>
                     </p>
                     <p className="text-xs text-gray-400 dark:text-gray-500">
-                      Gesendet: {new Date(req.requestedAt).toLocaleDateString()} {new Date(req.requestedAt).toLocaleTimeString()}
+                      {req.status === 'invited' ? 'Eingeladen am' : 'Gesendet am'}: {new Date(req.requestedAt).toLocaleDateString()} {new Date(req.requestedAt).toLocaleTimeString()}
                     </p>
                   </div>
                 </div>
+                
+                {(req.status === 'pending' || req.status === 'invited') && (
+                    <button 
+                        onClick={() => handleCancelOutgoingRequest(req.id, req.status === 'invited')}
+                        disabled={actionLoading[req.id]} 
+                        className="ml-auto px-3 py-1 text-xs font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-400 disabled:opacity-50 flex items-center flex-shrink-0"
+                    >
+                        {actionLoading[req.id] ? <FaSpinner className="animate-spin mr-1" /> : null} 
+                        Zurückziehen
+                    </button>
+                )}
               </li>
             ))}
           </ul>
